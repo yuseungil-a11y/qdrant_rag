@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+config.json
+incoming/
+extracted_images/
+extracted_text/
