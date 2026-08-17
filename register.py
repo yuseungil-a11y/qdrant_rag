@@ -1,5 +1,5 @@
 r"""
-윈도우 로컬에서 실행하는 문서 등록 프로그램 (이미지 추출 + OCR 지원)
+로컬에서 실행하는 문서 등록 프로그램 (이미지 추출 + OCR 지원). Windows/macOS/Linux 공용 코드.
 - 인자 없이 실행 -> 이 스크립트가 있는 폴더의 "incoming" 하위 폴더를 통째로 등록
 - 특정 파일/폴더를 지정하면 그것만 등록
 - PDF 안의 이미지는 별도 파일로 추출 저장 + OCR 텍스트를 함께 Qdrant에 등록
@@ -11,7 +11,8 @@ r"""
 사용법:
     python register.py
     python register.py "문서.pdf"
-    python register.py "C:\Docs\등록할문서들"
+    python register.py "C:\Docs\등록할문서들"      (Windows)
+    python register.py "/Users/me/Docs/등록할문서들"  (macOS/Linux)
 
 설정:
     이 스크립트와 같은 폴더의 config.json 에서 mcp_url 등을 읽어옵니다.
@@ -20,17 +21,19 @@ r"""
 사전 설치:
     pip install pymupdf python-docx pyhwp mcp pytesseract pillow requests openpyxl python-pptx
 
-OCR을 쓰려면 Tesseract 엔진 자체도 설치해야 합니다(파이썬 패키지와는 별도):
-    1) https://github.com/UB-Mannheim/tesseract/wiki 에서 윈도우 설치파일 다운로드/설치
-    2) 설치 중 "Additional language data" 에서 Korean 체크 (또는 설치 후 kor.traineddata를
-       tessdata 폴더에 추가)
-    3) 설치 경로(보통 C:\Program Files\Tesseract-OCR\tesseract.exe)를 config.json의
-       tesseract_cmd 값으로 수정
+OCR을 쓰려면 Tesseract 엔진 자체도 설치해야 합니다(파이썬 패키지와는 별도).
+PATH에 있으면 자동으로 찾고, 없으면 config.json의 tesseract_cmd에 직접 경로를 지정하세요:
+    - Windows: https://github.com/UB-Mannheim/tesseract/wiki 에서 설치파일 다운로드
+      (설치 중 "Additional language data"에서 Korean 체크, 보통
+      C:\Program Files\Tesseract-OCR\tesseract.exe 에 설치됨)
+    - macOS: brew install tesseract tesseract-lang
+    - Linux(Debian/Ubuntu 계열): sudo apt install tesseract-ocr tesseract-ocr-kor
     Tesseract가 없어도 스크립트는 동작합니다 - 이 경우 이미지는 저장되지만
     OCR 텍스트 없이 "페이지/파일명"만으로 등록됩니다.
 
 이미지 "의미" 캡션(비전 모델)을 쓰려면:
-    1) Ollama 설치: https://ollama.com/download (winget install Ollama.Ollama)
+    1) Ollama 설치: https://ollama.com/download
+       (Windows: winget install Ollama.Ollama / macOS: brew install ollama)
     2) 모델 다운로드: ollama pull moondream
        (CPU 전용 PC 기준 가벼운 모델. GPU 있으면 llava, qwen2.5vl 등으로 교체 가능)
     Ollama가 꺼져 있거나 모델이 없어도 스크립트는 동작합니다 - 이 경우 캡션 없이
@@ -38,6 +41,8 @@ OCR을 쓰려면 Tesseract 엔진 자체도 설치해야 합니다(파이썬 패
 
 구버전 .doc/.ppt 지원(선택):
     antiword(.doc) 또는 LibreOffice(둘 다 변환용)가 설치되어 있으면 자동 사용됩니다.
+    - macOS: brew install --cask libreoffice
+    - Linux: sudo apt install libreoffice
     없으면 해당 파일은 건너뛰고 안내 메시지를 출력합니다.
 """
 import asyncio
@@ -53,6 +58,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import certifi
@@ -103,7 +109,8 @@ else:
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 
 DEFAULT_CONFIG = {
-    "mcp_url": "https://blank-closing-techrepublic-lot.trycloudflare.com/mcp",  # cloudflared 재실행 시 갱신 필요
+    # 실제 서버 주소/키는 이 소스에 넣지 말고 config.json에서만 관리 (config.json은 git 추적 제외)
+    "mcp_url": "https://example.com/mcp?key=REPLACE_ME",
     "ollama_url": "http://localhost:11434/api/generate",
     "vision_model": "moondream",  # GPU 있으면 llava, qwen2.5vl 등으로 교체 가능
     "tesseract_cmd": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
@@ -138,18 +145,11 @@ CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
 OLLAMA_URL = CONFIG["ollama_url"]
 VISION_MODEL = CONFIG["vision_model"]
-TESSERACT_CMD = CONFIG["tesseract_cmd"]
 PROCESS_IMAGES = parse_yn(CONFIG["process_images"])
 STORE_IMAGE_BASE64 = parse_yn(CONFIG["store_image_base64"])
 
-if OCR_LIB_AVAILABLE:
-    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-    OCR_AVAILABLE = Path(TESSERACT_CMD).exists()
-else:
-    OCR_AVAILABLE = False
-
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 120
+CHUNK_SIZE = 1500  # 800 -> 1500: 청크 수 자체를 줄여 저장 요청/배치 수를 더 줄임 (검색 정밀도 손해는 미미)
+CHUNK_OVERLAP = 200
 
 CAPTION_PROMPT = "Describe what this image shows and what information or meaning it conveys, in detail."
 # 참고: moondream은 한국어 출력 품질이 낮아(예: 한 단어만 반환) 캡션은 영어로 생성합니다.
@@ -162,13 +162,43 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 def find_soffice() -> str | None:
-    """구버전 .doc/.ppt 변환에 쓸 LibreOffice(soffice) 실행 파일을 찾는다."""
-    exe = shutil.which("soffice")
+    """구버전 .doc/.ppt 변환에 쓸 LibreOffice(soffice) 실행 파일을 찾는다 (Windows/macOS/Linux)."""
+    exe = shutil.which("soffice") or shutil.which("soffice.bin")
     if exe:
         return exe
     for candidate in (
+        # Windows
         r"C:\Program Files\LibreOffice\program\soffice.exe",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        # macOS
+        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+        # Linux (배포판/설치 방식에 따라 경로가 다양함)
+        "/usr/bin/soffice",
+        "/usr/local/bin/soffice",
+        "/opt/libreoffice/program/soffice",
+        "/snap/bin/libreoffice.soffice",
+    ):
+        if Path(candidate).exists():
+            return candidate
+    return None
+
+
+def find_tesseract(configured: str) -> str | None:
+    """Tesseract 실행 파일을 찾는다 (Windows/macOS/Linux). config.json에 지정된 경로가
+    실제로 존재하면 그걸 쓰고, 아니면 PATH -> OS별 흔한 설치 경로 순으로 자동 탐색한다."""
+    if configured and Path(configured).exists():
+        return configured
+    exe = shutil.which("tesseract")
+    if exe:
+        return exe
+    for candidate in (
+        # Windows
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        # macOS (Homebrew: Apple Silicon vs Intel)
+        "/opt/homebrew/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        # Linux
+        "/usr/bin/tesseract",
     ):
         if Path(candidate).exists():
             return candidate
@@ -177,12 +207,47 @@ def find_soffice() -> str | None:
 
 SOFFICE_CMD = find_soffice()
 
+TESSERACT_CMD = find_tesseract(CONFIG["tesseract_cmd"])
+if OCR_LIB_AVAILABLE and TESSERACT_CMD:
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    OCR_AVAILABLE = True
+else:
+    OCR_AVAILABLE = False
+
 
 def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    chunks, i = [], 0
-    while i < len(text):
-        chunks.append(text[i:i + size])
-        i += size - overlap
+    """줄(line) 경계를 지키면서 청크를 만든다. 예전에는 문자 수로만 뚝 잘라서(text[i:i+size])
+    엑셀 행("셀1\\t셀2\\t셀3")이나 문장이 청크 중간에서 끊겨 검색 결과가 잘린 것처럼 보이는
+    문제가 있었다 - 한 줄이 통째로 다음 청크로 넘어가더라도 절대 줄 중간을 자르지 않는다.
+    단, 한 줄 자체가 size보다 긴 경우(줄바꿈 없는 매우 긴 문단 등)는 예외적으로 그 줄만
+    문자 단위로 쪼갠다."""
+    lines = []
+    for line in text.split("\n"):
+        if len(line) <= size:
+            lines.append(line)
+        else:
+            for i in range(0, len(line), size):
+                lines.append(line[i:i + size])
+
+    chunks, i, n = [], 0, len(lines)
+    while i < n:
+        buf, length, j = [], 0, i
+        while j < n:
+            add_len = len(lines[j]) + (1 if buf else 0)
+            if buf and length + add_len > size:
+                break
+            buf.append(lines[j])
+            length += add_len
+            j += 1
+        chunks.append("\n".join(buf))
+        if j >= n:
+            break
+        # 다음 청크는 문자 기준 overlap만큼 줄 단위로 되돌아가서 시작 (최소 한 줄은 전진)
+        back_chars, k = 0, j
+        while k > i and back_chars < overlap:
+            k -= 1
+            back_chars += len(lines[k]) + 1
+        i = max(i + 1, k)
     return [c for c in chunks if c.strip()]
 
 
@@ -584,20 +649,108 @@ def read_text_only(path: Path) -> str:
     return ""
 
 
-async def register_text_chunks(session: ClientSession, path: Path, text: str) -> list[tuple[str, dict]]:
-    """Qdrant에 실제로 보낸 (information, metadata) 목록을 그대로 반환 (덤프 파일 작성에 재사용)."""
-    if not text.strip():
+# 텍스트/이미지를 하나씩 개별 호출로 저장하면 호출마다 서버에서 임베딩을 새로 계산해야 해서
+# 느리다. 이 서버의 병목은 로컬 임베딩 모델(CPU 연산)이라 동시 요청을 늘려봐야 같은 CPU를
+# 두고 경쟁만 할 뿐 별 도움이 안 되고, 오히려 여러 개를 한 번에 묶어 embed_documents()를
+# 한 번만 호출하는 쪽(배치)이 훨씬 효과적이다. 그래서 BATCH_SIZE개씩 묶어
+# qdrant_store_batch/qdrant_store_mine_batch(서버에서 임베딩+upsert를 한 번에 처리)로 보낸다.
+# 이미지는 base64까지 실리면 항목당 최대 몇 MB가 될 수 있어 요청 본문이 과도하게 커지지
+# 않도록 이미지 전용으로 훨씬 작은 배치 크기를 쓴다.
+TEXT_BATCH_SIZE = 25
+IMAGE_BATCH_SIZE = 3
+UPLOAD_CONCURRENCY = 8  # 배치 툴이 없는 게이트웨이용 폴백: 개별 저장 호출을 이만큼 동시에 전송
+
+
+async def _store_group_individually(
+    session: ClientSession, group: list[tuple[str, dict]], store_tool: str,
+    progress_callback, unit_label: str, done: int, total: int,
+) -> int:
+    """배치 저장 툴이 없는(구버전) 게이트웨이용 폴백. 개별 qdrant-store 호출을
+    UPLOAD_CONCURRENCY개씩 동시에 보내 순차 호출보다 훨씬 빠르게 처리한다."""
+    sem = asyncio.Semaphore(UPLOAD_CONCURRENCY)
+    lock = asyncio.Lock()
+
+    async def store_one(info: str, metadata: dict):
+        nonlocal done
+        async with sem:
+            result = await session.call_tool(store_tool, {"information": info, "metadata": metadata})
+        if getattr(result, "isError", False):
+            message = "\n".join(b.text for b in result.content if hasattr(b, "text")) or str(result)
+            print(f"[오류] {message}")
+        async with lock:
+            done += 1
+            _report(progress_callback, done, total, unit_label)
+
+    await asyncio.gather(*(store_one(info, metadata) for info, metadata in group))
+    return done
+
+
+async def _store_in_batches(
+    session: ClientSession, records: list[tuple[str, dict]], store_tool: str, batch_size: int,
+    progress_callback=None, unit_label: str = "저장",
+) -> list[tuple[str, dict]]:
+    """(information, metadata) 목록을 batch_size개씩 묶어 배치 저장 툴로 전송.
+    게이트웨이가 아직 배치 툴을 지원하지 않으면("Unknown tool") 개별 동시 저장으로 자동 전환."""
+    if not records:
         return []
-    chunks = chunk_text(text)
-    records = []
-    for idx, chunk in enumerate(chunks):
-        metadata = {"source": str(path), "title": path.name, "type": "text", "chunk_index": idx}
-        await session.call_tool("qdrant-store", {"information": chunk, "metadata": metadata})
-        records.append((chunk, metadata))
+    batch_tool = "qdrant_store_mine_batch" if store_tool == "qdrant_store_mine" else "qdrant_store_batch"
+    total = len(records)
+    use_batch = True
+    done = 0
+
+    for start in range(0, total, batch_size):
+        group = records[start:start + batch_size]
+
+        if use_batch:
+            items = [{"information": info, "metadata": metadata} for info, metadata in group]
+            result = await session.call_tool(batch_tool, {"items": items})
+            if getattr(result, "isError", False):
+                message = "\n".join(b.text for b in result.content if hasattr(b, "text")) or str(result)
+                if "Unknown tool" in message:
+                    print(f"[안내] {batch_tool} 툴이 게이트웨이에 아직 없어 개별 동시 저장으로 전환합니다.")
+                    use_batch = False
+                else:
+                    print(f"[오류] {message}")
+                    done = min(start + batch_size, total)
+                    _report(progress_callback, done, total, unit_label)
+                    continue
+            else:
+                done = min(start + batch_size, total)
+                _report(progress_callback, done, total, unit_label)
+                continue
+
+        done = await _store_group_individually(session, group, store_tool, progress_callback, unit_label, done, total)
+
     return records
 
 
-async def register_images(session: ClientSession, path: Path, images_meta: list[dict]) -> list[tuple[str, dict]]:
+async def register_text_chunks_raw(
+    session: ClientSession, source: str, title: str, text: str,
+    store_tool: str = "qdrant-store", progress_callback=None,
+) -> list[tuple[str, dict]]:
+    """source/title을 직접 지정해서 텍스트를 등록 (파일이 아니라 붙여넣은 텍스트 등에도 재사용).
+    store_tool: "qdrant-store"(팀 공유) 또는 "qdrant_store_mine"(개인 저장소)."""
+    if not text.strip():
+        return []
+    chunks = chunk_text(text)
+    records = [
+        (chunk, {"source": source, "title": title, "type": "text", "chunk_index": idx})
+        for idx, chunk in enumerate(chunks)
+    ]
+    return await _store_in_batches(session, records, store_tool, TEXT_BATCH_SIZE, progress_callback, "저장")
+
+
+async def register_text_chunks(
+    session: ClientSession, path: Path, text: str, store_tool: str = "qdrant-store", progress_callback=None,
+) -> list[tuple[str, dict]]:
+    """Qdrant에 실제로 보낸 (information, metadata) 목록을 그대로 반환 (덤프 파일 작성에 재사용)."""
+    return await register_text_chunks_raw(session, str(path), path.name, text, store_tool, progress_callback)
+
+
+async def register_images(
+    session: ClientSession, path: Path, images_meta: list[dict],
+    store_tool: str = "qdrant-store", progress_callback=None,
+) -> list[tuple[str, dict]]:
     """Qdrant에 실제로 보낸 (information, metadata) 목록을 그대로 반환 (덤프 파일 작성에 재사용)."""
     records = []
     for meta in images_meta:
@@ -625,17 +778,18 @@ async def register_images(session: ClientSession, path: Path, images_meta: list[
             if img_b64:
                 metadata["image_base64"] = img_b64
 
-        await session.call_tool("qdrant-store", {"information": info, "metadata": metadata})
         records.append((info, metadata))
-    return records
+
+    return await _store_in_batches(session, records, store_tool, IMAGE_BATCH_SIZE, progress_callback, "이미지 저장")
 
 
-def write_extraction_dump(path: Path, text_records: list[tuple[str, dict]], image_records: list[tuple[str, dict]]):
-    """이 파일에서 실제로 Qdrant에 등록된 내용을 사람이 읽기 좋은 텍스트 파일로 남긴다."""
+def write_extraction_dump_raw(dump_name: str, source_label: str,
+                               text_records: list[tuple[str, dict]], image_records: list[tuple[str, dict]]):
+    """dump_name(파일명으로 안전한 문자열)/source_label(원본 표기)을 직접 지정해서 덤프 파일 작성."""
     if not text_records and not image_records:
         return
     EXTRACTED_TEXT_DIR.mkdir(parents=True, exist_ok=True)
-    lines = [f"=== 원본 파일: {path} ===", ""]
+    lines = [f"=== 원본: {source_label} ===", ""]
 
     lines.append(f"--- 텍스트 청크 (총 {len(text_records)}개) ---")
     for chunk, metadata in text_records:
@@ -651,8 +805,13 @@ def write_extraction_dump(path: Path, text_records: list[tuple[str, dict]], imag
         lines.append(info)
         lines.append("")
 
-    dump_path = EXTRACTED_TEXT_DIR / f"{path.stem}.txt"
+    dump_path = EXTRACTED_TEXT_DIR / f"{dump_name}.txt"
     dump_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_extraction_dump(path: Path, text_records: list[tuple[str, dict]], image_records: list[tuple[str, dict]]):
+    """이 파일에서 실제로 Qdrant에 등록된 내용을 사람이 읽기 좋은 텍스트 파일로 남긴다."""
+    write_extraction_dump_raw(path.stem, str(path), text_records, image_records)
 
 
 # 텍스트와 이미지를 함께 뽑아내는 포맷들 (이미지가 있으면 OCR+캡션까지 처리)
@@ -665,13 +824,15 @@ TEXT_AND_IMAGE_PROCESSORS = {
 }
 
 
-async def register_file(session: ClientSession, path: Path, progress_callback=None):
+async def register_file(session: ClientSession, path: Path, progress_callback=None, store_tool: str = "qdrant-store"):
     ext = path.suffix.lower()
 
     if ext in TEXT_AND_IMAGE_PROCESSORS:
         text, images_meta = TEXT_AND_IMAGE_PROCESSORS[ext](path, progress_callback=progress_callback)
-        text_records = await register_text_chunks(session, path, text)
-        image_records = await register_images(session, path, images_meta) if images_meta else []
+        text_records = await register_text_chunks(session, path, text, store_tool, progress_callback)
+        image_records = (
+            await register_images(session, path, images_meta, store_tool, progress_callback) if images_meta else []
+        )
         write_extraction_dump(path, text_records, image_records)
         print(f"등록 완료: {path.name} (텍스트 {len(text_records)}청크, 이미지 {len(image_records)}개)")
         return
@@ -683,7 +844,7 @@ async def register_file(session: ClientSession, path: Path, progress_callback=No
         ocr_text = ocr_image(path)
         caption = caption_image(path)
         meta = [{"page": None, "image_index": 1, "image_path": str(path), "ocr_text": ocr_text, "caption": caption}]
-        image_records = await register_images(session, path, meta)
+        image_records = await register_images(session, path, meta, store_tool, progress_callback)
         write_extraction_dump(path, [], image_records)
         print(f"등록 완료: {path.name} (이미지 {len(image_records)}개)")
         return
@@ -692,12 +853,14 @@ async def register_file(session: ClientSession, path: Path, progress_callback=No
     if not text.strip():
         print(f"건너뜀(내용 없음): {path.name}")
         return
-    text_records = await register_text_chunks(session, path, text)
+    text_records = await register_text_chunks(session, path, text, store_tool, progress_callback)
     write_extraction_dump(path, text_records, [])
     print(f"등록 완료: {path.name} (텍스트 {len(text_records)}청크)")
 
 
-async def register_targets(session: ClientSession, targets: list[Path], progress_callback=None):
+async def register_targets(
+    session: ClientSession, targets: list[Path], progress_callback=None, store_tool: str = "qdrant-store"
+):
     """파일/폴더가 섞인 경로 목록을 받아 실제 파일 목록으로 펼친 뒤 등록."""
     files = []
     for target in targets:
@@ -729,11 +892,12 @@ async def register_targets(session: ClientSession, targets: list[Path], progress
             except Exception:
                 pass
 
-        await register_file(session, f, progress_callback=_unit_progress)
+        await register_file(session, f, progress_callback=_unit_progress, store_tool=store_tool)
         _unit_progress(1, 1, "완료")  # 세부 진행률을 못 받는 포맷(.doc/.txt 등)도 파일 완료 시 확실히 갱신
 
 
-async def main(targets: Path | list[Path], progress_callback=None):
+async def main(targets: Path | list[Path], progress_callback=None, store_tool: str = "qdrant-store"):
+    """store_tool: "qdrant-store"(팀 공유 저장소) 또는 "qdrant_store_mine"(개인 저장소)."""
     if isinstance(targets, Path):
         targets = [targets]
 
@@ -743,7 +907,11 @@ async def main(targets: Path | list[Path], progress_callback=None):
         if not OCR_LIB_AVAILABLE:
             print("참고: pytesseract/Pillow가 없어 OCR 없이 이미지만 저장합니다. (pip install pytesseract pillow)")
         elif not OCR_AVAILABLE:
-            print(f"참고: Tesseract 엔진을 찾을 수 없어 OCR 없이 진행합니다. (config.json의 tesseract_cmd 확인: {TESSERACT_CMD})")
+            print(
+                "참고: Tesseract 엔진을 찾을 수 없어 OCR 없이 진행합니다. "
+                f"PATH에 없으면 config.json의 tesseract_cmd에 실제 설치 경로를 지정하세요. "
+                f"(설정값: {CONFIG['tesseract_cmd']!r})"
+            )
 
         ollama_base = OLLAMA_URL.rsplit("/api/", 1)[0]
         try:
@@ -755,14 +923,249 @@ async def main(targets: Path | list[Path], progress_callback=None):
     if not SOFFICE_CMD:
         print("참고: LibreOffice가 없어 구버전 .ppt(및 antiword 없을 때 .doc)는 건너뜁니다.")
 
-    async with streamablehttp_client(MCP_URL) as (read, write):
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        # mcp 버전에 따라 (read, write) 또는 (read, write, get_session_id)를 yield하므로
+        # 앞의 두 값만 안전하게 꺼내 쓴다.
+        read, write = mcp_streams[0], mcp_streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
-            await register_targets(session, targets, progress_callback=progress_callback)
+            await register_targets(session, targets, progress_callback=progress_callback, store_tool=store_tool)
 
     print("모든 작업 완료.")
     print(f"추출된 이미지는 여기 저장됨: {IMAGES_DIR}")
     print(f"Qdrant에 등록된 내용(텍스트+이미지 설명)은 여기서 확인 가능: {EXTRACTED_TEXT_DIR}")
+
+
+def _sanitize_filename(name: str) -> str:
+    name = re.sub(r'[\\/:*?"<>|]', "_", name).strip()
+    return name or "pasted_text"
+
+
+async def register_pasted_text(
+    title: str, text: str, progress_callback=None, store_tool: str = "qdrant-store"
+) -> int:
+    """탐색기 파일이 아니라 GUI에 직접 붙여넣은 텍스트를 Qdrant에 등록. 등록된 청크 수 반환.
+    store_tool: "qdrant-store"(팀 공유 저장소) 또는 "qdrant_store_mine"(개인 저장소)."""
+    title = title.strip() or datetime.now().strftime("붙여넣은 텍스트 %Y-%m-%d %H:%M:%S")
+    source = f"(직접 입력) {title}"
+
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        read, write = mcp_streams[0], mcp_streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            records = await register_text_chunks_raw(session, source, title, text, store_tool, progress_callback)
+
+    write_extraction_dump_raw(_sanitize_filename(title), source, records, [])
+    label = "개인 저장소" if store_tool == "qdrant_store_mine" else "팀 공유 저장소"
+    print(f"등록 완료({label}): {title} (텍스트 {len(records)}청크)")
+    return len(records)
+
+
+async def _call_qdrant_delete(args: dict) -> int:
+    """게이트웨이의 qdrant_delete 툴을 호출해 실제로 삭제된 개수를 반환하는 저수준 헬퍼."""
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        read, write = mcp_streams[0], mcp_streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("qdrant_delete", args)
+
+    if getattr(result, "isError", False):
+        message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
+        print(f"[오류] {message}")
+        return 0
+
+    # qdrant_delete는 {"deleted": N}을 반환한다. FastMCP는 이를 structuredContent(dict)와
+    # content(JSON 문자열 TextContent)로 함께 실어 보내므로, structuredContent를 우선 쓰고
+    # 없으면 content의 JSON 문자열을 파싱하는 순서로 안전하게 꺼낸다.
+    deleted = None
+    structured = getattr(result, "structuredContent", None)
+    if isinstance(structured, dict):
+        deleted = structured.get("deleted")
+    if deleted is None:
+        for block in result.content:
+            if hasattr(block, "text"):
+                try:
+                    deleted = json.loads(block.text).get("deleted")
+                    break
+                except Exception:
+                    pass
+    return deleted or 0
+
+
+async def delete_by_source(source: str) -> int:
+    """source(등록 당시 파일 경로 또는 붙여넣은 텍스트의 source 문자열)에 해당하는 모든
+    항목(텍스트+이미지)을 통째로 삭제한다. 실제로 삭제된 개수를 반환.
+    되돌릴 수 없는 작업이므로 호출 전 UI 쪽에서 반드시 확인을 받아야 한다."""
+    deleted = await _call_qdrant_delete({"source": source})
+    if deleted == 0:
+        print(f"삭제할 항목이 없습니다: source={source!r}과 일치하는 데이터가 없습니다.")
+    else:
+        print(f"삭제 완료: source={source!r}, {deleted}개 항목을 삭제했습니다.")
+    return deleted
+
+
+_FIND_ENTRY_RE = re.compile(r"<entry><content>(.*?)</content><metadata>(.*?)</metadata></entry>", re.S)
+
+
+async def search_qdrant(query: str) -> list[dict]:
+    """qdrant-find로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
+    삭제할 항목을 키워드로 찾아 고를 때 사용 (검색 자체는 아무것도 지우지 않음)."""
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        read, write = mcp_streams[0], mcp_streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("qdrant-find", {"query": query})
+
+    if getattr(result, "isError", False):
+        message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
+        print(f"[검색 오류] {message}")
+        return []
+
+    raw = None
+    structured = getattr(result, "structuredContent", None)
+    if isinstance(structured, dict):
+        raw = structured.get("result")
+    if raw is None:
+        for block in result.content:
+            if hasattr(block, "text"):
+                try:
+                    raw = json.loads(block.text)
+                    break
+                except Exception:
+                    pass
+    if not raw:
+        return []
+
+    parsed = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        m = _FIND_ENTRY_RE.match(item.strip())
+        if not m:
+            continue  # 안내 문구("Results for the query ...") 등 entry 형식이 아닌 항목은 건너뜀
+        content_text, meta_json = m.groups()
+        try:
+            metadata = json.loads(meta_json)
+        except Exception:
+            metadata = {}
+        parsed.append({"content": content_text, "metadata": metadata})
+    return parsed
+
+
+async def delete_by_metadata(metadata: dict) -> int:
+    """search_qdrant()로 얻은 metadata를 그대로 넘기면, source(+chunk_index 또는
+    +page+image_index)로 정확히 그 항목 하나만 골라서 삭제한다. 파일 전체가 아니라
+    검색으로 찾은 낱개 항목만 지우고 싶을 때 사용."""
+    source = metadata.get("source")
+    if not source:
+        print("[오류] source가 없는 항목은 삭제할 수 없습니다.")
+        return 0
+
+    args = {"source": source}
+    if metadata.get("type") == "image":
+        if metadata.get("page") is not None:
+            args["page"] = metadata["page"]
+        if metadata.get("image_index") is not None:
+            args["image_index"] = metadata["image_index"]
+    elif metadata.get("chunk_index") is not None:
+        args["chunk_index"] = metadata["chunk_index"]
+
+    deleted = await _call_qdrant_delete(args)
+    label = metadata.get("title") or source
+    if deleted == 0:
+        print(f"삭제할 항목이 없습니다: {label}")
+    else:
+        print(f"삭제 완료: {label} ({deleted}개)")
+    return deleted
+
+
+async def search_my_qdrant(query: str) -> list[dict]:
+    """qdrant_find_mine으로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
+    config.json의 mcp_url에 담긴 key 본인의 개인 저장소만 검색된다(다른 사람 데이터는
+    애초에 안 보임). search_qdrant()의 개인 저장소 버전 — entry 형식이 같아서 같은
+    정규식(_FIND_ENTRY_RE)으로 파싱한다. metadata에는 게이트웨이가 실어 보낸 point id가
+    "_id" 키로 들어있어, delete_mine_by_metadata()가 그 항목만 정확히 지울 때 쓴다."""
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        read, write = mcp_streams[0], mcp_streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("qdrant_find_mine", {"query": query})
+
+    if getattr(result, "isError", False):
+        message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
+        print(f"[검색 오류] {message}")
+        return []
+
+    raw = None
+    structured = getattr(result, "structuredContent", None)
+    if isinstance(structured, dict):
+        raw = structured.get("result")
+    if raw is None:
+        for block in result.content:
+            if hasattr(block, "text"):
+                try:
+                    raw = json.loads(block.text)
+                    break
+                except Exception:
+                    pass
+    if not raw:
+        return []
+
+    parsed = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        m = _FIND_ENTRY_RE.match(item.strip())
+        if not m:
+            continue  # "결과가 없습니다" 같은 안내 문구는 entry 형식이 아니라서 자동으로 걸러짐
+        content_text, meta_json = m.groups()
+        try:
+            metadata = json.loads(meta_json)
+        except Exception:
+            metadata = {}
+        parsed.append({"content": content_text, "metadata": metadata})
+    return parsed
+
+
+async def delete_mine_by_metadata(metadata: dict) -> int:
+    """search_my_qdrant()로 얻은 metadata를 그대로 넘기면, 그 안의 _id(point id)로
+    본인 개인 저장소에서 정확히 그 항목 하나만 삭제한다."""
+    point_id = metadata.get("_id")
+    if not point_id:
+        print("[오류] _id가 없는 항목은 삭제할 수 없습니다.")
+        return 0
+
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        read, write = mcp_streams[0], mcp_streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("qdrant_delete_mine", {"point_ids": [point_id]})
+
+    if getattr(result, "isError", False):
+        message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
+        print(f"[오류] {message}")
+        return 0
+
+    deleted = None
+    structured = getattr(result, "structuredContent", None)
+    if isinstance(structured, dict):
+        deleted = structured.get("deleted")
+    if deleted is None:
+        for block in result.content:
+            if hasattr(block, "text"):
+                try:
+                    deleted = json.loads(block.text).get("deleted")
+                    break
+                except Exception:
+                    pass
+    deleted = deleted or 0
+
+    label = metadata.get("title") or metadata.get("source") or point_id
+    if deleted == 0:
+        print(f"삭제할 항목이 없습니다: {label}")
+    else:
+        print(f"삭제 완료(개인 저장소): {label}")
+    return deleted
 
 
 if __name__ == "__main__":
