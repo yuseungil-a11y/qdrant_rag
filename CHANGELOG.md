@@ -5,6 +5,25 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 1.1.3
+
+- **버그 수정**: macOS `.app` 번들로 빌드하면 `config.json`/`incoming`/`extracted_images`/`extracted_text`가
+  `qdrant_register_gui.app/Contents/MacOS/` 안쪽 깊숙이 생성되어 Finder에서 접근하기 불편했던 문제 수정.
+  이제 macOS `.app` 번들에서 실행 중이면 번들이 놓인(사용자 눈에 보이는) 폴더를 기준으로 잡아, Windows exe와
+  동일하게 "실행 파일과 같은 경로"에 생성/조회되도록 함 (`register.py`의 `SCRIPT_DIR` 계산 수정).
+
+## 1.1.2
+
+- **버그 수정**: 1.1.1의 Command-v 키 바인딩 수정만으로는 일부 macOS 환경에서 여전히 붙여넣기가 안 되는
+  것으로 확인됨(Tk 기본 메뉴가 Cmd+V를 먼저 가로채는 것으로 추정, 정확한 원인 미확정). 키보드 단축키에
+  의존하지 않도록 "텍스트 붙여넣기로 등록" 섹션의 제목/본문 입력창 옆에 **붙여넣기 버튼**을 추가해서
+  클립보드 내용을 직접 삽입하도록 함.
+
+## 1.1.1
+
+- **버그 수정**: macOS에서 Entry/Text 위젯(텍스트 붙여넣기 제목/본문, 검색창 등)에 Command-V(붙여넣기)/Command-C(복사)/Command-X(잘라내기)/Command-A(전체선택)가
+  동작하지 않던 문제 수정. 일부 Tcl/Tk 빌드는 macOS 기본 단축키 바인딩이 빠져있어 명시적으로 바인딩 추가.
+
 ## 1.1.0
 
 - **마이너 기능**: Windows/macOS/Linux 크로스플랫폼 지원.

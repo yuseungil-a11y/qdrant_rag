@@ -34,7 +34,7 @@ except ImportError:
 
 import register
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.3"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -100,6 +100,14 @@ class App:
         root.title(f"Qdrant 문서 등록 v{APP_VERSION}")
         root.geometry("820x1000")
         root.minsize(650, 500)
+
+        # macOS의 일부 Tcl/Tk 빌드에서는 Entry/Text에 Command-c/v/x/a가
+        # 기본 바인딩되어 있지 않아 붙여넣기가 먹지 않는 경우가 있어 명시적으로 등록
+        for widget_class in ("Entry", "Text"):
+            root.bind_class(widget_class, "<Command-c>", lambda e: e.widget.event_generate("<<Copy>>"))
+            root.bind_class(widget_class, "<Command-v>", lambda e: e.widget.event_generate("<<Paste>>"))
+            root.bind_class(widget_class, "<Command-x>", lambda e: e.widget.event_generate("<<Cut>>"))
+            root.bind_class(widget_class, "<Command-a>", lambda e: e.widget.event_generate("<<SelectAll>>"))
 
         # 창을 스크롤해도 항상 보이도록 최상단에 고정하는 버전 표시줄
         version_bar = tk.Frame(root)
@@ -196,6 +204,17 @@ class App:
         tk.Label(paste_title_frame, text="제목:").pack(side="left")
         self.paste_title_entry = tk.Entry(paste_title_frame)
         self.paste_title_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        tk.Button(
+            paste_title_frame, text="붙여넣기",
+            command=lambda: self._paste_from_clipboard(self.paste_title_entry),
+        ).pack(side="left", padx=(5, 0))
+
+        paste_text_toolbar = tk.Frame(paste_frame)
+        paste_text_toolbar.pack(fill="x", padx=5, pady=(2, 0))
+        tk.Button(
+            paste_text_toolbar, text="붙여넣기",
+            command=lambda: self._paste_from_clipboard(self.paste_text),
+        ).pack(side="right")
 
         paste_text_frame = tk.Frame(paste_frame)
         paste_text_frame.pack(fill="x", padx=5)
@@ -375,6 +394,13 @@ class App:
             sys.stderr = old_stderr
             self.busy = False
             self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+
+    def _paste_from_clipboard(self, widget):
+        try:
+            content = self.root.clipboard_get()
+        except tk.TclError:
+            return
+        widget.insert(tk.INSERT, content)
 
     def start_pasted_registration(self):
         if self.busy:

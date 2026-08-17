@@ -103,7 +103,14 @@ except ImportError:
 if getattr(sys, "frozen", False):
     # PyInstaller onefile로 실행 중이면 __file__은 임시 압축 해제 폴더를 가리키므로,
     # config.json/incoming/extracted_images는 실제 exe가 있는 폴더 기준으로 잡는다.
-    SCRIPT_DIR = Path(sys.executable).resolve().parent
+    _exe_path = Path(sys.executable).resolve()
+    if _exe_path.parent.name == "MacOS" and _exe_path.parent.parent.name == "Contents":
+        # macOS .app 번들 안에서는 exe가 Contents/MacOS 깊숙이 있으므로,
+        # 번들 내부가 아니라 .app이 놓인(사용자 눈에 보이는) 폴더를 기준으로 잡는다.
+        # Windows exe와 동일하게 "실행 파일과 같은 경로"로 보이게 하기 위함.
+        SCRIPT_DIR = _exe_path.parents[3]
+    else:
+        SCRIPT_DIR = _exe_path.parent
 else:
     SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
