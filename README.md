@@ -1,13 +1,16 @@
 # Qdrant 문서 등록 프로그램
 
-로컬 문서(PDF/오피스 파일/이미지)를 분석해서 Qdrant 벡터 DB에 등록하는 프로그램. 텍스트뿐 아니라 문서 안에 포함된 이미지도 의미를 해석(캡션)해서 함께 검색되게 만드는 것이 목표.
+로컬 문서(PDF/오피스 파일/이미지)를 분석해서 Qdrant 벡터 DB에 등록하고, 같은 문서를 사내 MediaWiki에도
+자동 업로드하는 통합 프로그램. 텍스트뿐 아니라 문서 안에 포함된 이미지도 의미를 해석(캡션)해서 함께
+검색되게 만드는 것이 목표.
 
 ## 구성 파일
 
 | 파일 | 역할 |
 |---|---|
-| `register.py` | 핵심 로직 — 파일을 읽어서 텍스트/이미지를 추출하고 Qdrant에 등록. CLI로도 직접 실행 가능 |
-| `gui.py` | 데스크톱 GUI(tkinter) — 드래그 앤 드롭으로 등록, 진행상태/오류를 리스트박스에 표시 (현재 주력 사용 방식) |
+| `register.py` | Qdrant 등록 핵심 로직 — 파일을 읽어서 텍스트/이미지를 추출하고 Qdrant에 등록. CLI로도 직접 실행 가능 |
+| `wiki_upload.py` | 위키 등록 핵심 로직 — `register.py`의 텍스트 추출기를 재사용해 MediaWiki 페이지로 업로드 |
+| `gui.py` | 데스크톱 GUI(tkinter) — Qdrant 등록과 위키 등록을 한 창에서 함께 사용 (현재 주력 사용 방식) |
 | `config.json` | 실행 설정 (없으면 최초 실행 시 기본값으로 자동 생성) |
 | `dist/qdrant_register_gui.exe` | Windows용 GUI를 PyInstaller onefile로 빌드한 배포용 실행파일 |
 
@@ -74,13 +77,19 @@ Tesseract나 Ollama가 설치/실행되어 있지 않으면 해당 기능만 조
   "vision_model": "moondream",
   "tesseract_cmd": "Tesseract 실행 파일 경로",
   "process_images": "y",
-  "store_image_base64": "y"
+  "store_image_base64": "y",
+  "wiki_site_url": "사내 MediaWiki 주소 (예: pms.utinfo.co.kr)",
+  "wiki_path": "위키 경로 (예: /mediawiki/)",
+  "wiki_username": "위키 로그인 계정 (봇 패스워드 형식이면 User@BotName)",
+  "wiki_password": "위키 로그인 비밀번호(봇 패스워드 토큰)",
+  "wiki_category": "업로드 시 기본으로 적용할 분류명"
 }
 ```
 - `process_images`: `n`으로 바꾸면 이미지 추출/OCR/캡션을 전부 건너뛰고 텍스트만 등록 (GUI에서는 체크박스로 매 실행마다 덮어쓸 수 있음)
 - `store_image_base64`: `n`으로 바꾸면 이미지 자체는 저장 안 하고 캡션/OCR 텍스트만 등록
+- `wiki_*`: 예전 `key.txt`를 대체. 처음 실행 시 없으면 플레이스홀더로 자동 채워지므로, 실제 값으로 수정 필요 (`wiki_upload.get_wiki_config()`)
 
-**주의**: `config.json`의 `mcp_url`에는 실제 API 키가 포함됨. `.gitignore`에 이미 등록되어 있어 git에는 올라가지 않지만, 실수로 커밋하지 않도록 주의. `register.py`의 `DEFAULT_CONFIG`에는 절대 실제 키를 넣지 않음(플레이스홀더만 유지).
+**주의**: `config.json`의 `mcp_url`/`wiki_password`에는 실제 API 키·비밀번호가 포함됨. `.gitignore`에 이미 등록되어 있어 git에는 올라가지 않지만, 실수로 커밋하지 않도록 주의. `register.py`의 `DEFAULT_CONFIG`, `wiki_upload.py`의 `WIKI_DEFAULT_CONFIG`에는 절대 실제 키를 넣지 않음(플레이스홀더만 유지). 예전 `key.txt`도 같은 이유로 `.gitignore`에 추가되어 있음.
 
 ## GUI (`gui.py` / `qdrant_register_gui.exe`)
 
@@ -95,6 +104,12 @@ Tesseract나 Ollama가 설치/실행되어 있지 않으면 해당 기능만 조
 - **키워드 검색 후 선택 삭제 (팀 공유 저장소)**: 파일 경로를 몰라도, 검색어로 `qdrant-find`를 돌려 결과를 목록에 띄우고 여러 개 다중 선택해서 그 항목들만 정밀하게 지울 수 있음. 검색 자체는 아무것도 안 지움 — 목록에서 골라 "선택 항목 삭제"를 눌러야 실제 삭제가 일어나고, 확인창에서 대상 목록을 보여준 뒤 재확인함 (`register.search_qdrant()`로 조회 → `register.delete_by_metadata()`로 각 항목의 `source`+`chunk_index`(텍스트) 또는 `source`+`page`+`image_index`(이미지)를 그대로 넘겨 그 항목 하나만 삭제). 파일 통째 삭제와 달리 같은 파일 안의 다른 청크/이미지는 건드리지 않음
 - **키워드 검색 후 선택 삭제 (내 개인 저장소)**: 위와 UI/동작 방식은 완전히 동일하지만 대상이 다름 — `config.json`의 `mcp_url`에 박힌 key 본인의 개인 저장소(`personal_<이름>`)만 검색/삭제 대상이 됨 (`register.search_my_qdrant()` → `register.delete_mine_by_metadata()`, 게이트웨이의 `qdrant_find_mine`/`qdrant_delete_mine` 호출). 항상 **본인 키로 인증된 본인 저장소만** 건드릴 수 있고, 다른 사람의 개인 저장소는 그 사람의 point id를 알아도 삭제 요청 자체가 무시됨(`{"deleted": 0}`) — 게이트웨이가 삭제 전에 반드시 "그 point id가 요청자 본인 컬렉션 안에 있는지" 먼저 확인하기 때문
 - 삭제는 전부 되돌릴 수 없는 작업이라 반드시 확인창을 거침. 게이트웨이의 `qdrant_delete`/`qdrant_delete_mine` MCP 툴을 호출하며, 반환된 `{"deleted": N}`을 로그에 표시. **게이트웨이가 이 툴들을 지원하는 버전이어야 동작함** — 구버전 게이트웨이에는 없어 "Unknown tool" 오류가 남
+- **위키 문서 등록**: 같은 창 하단에 별도 드래그 앤 드롭 영역 — 파일/폴더를 올리면 Qdrant가 아니라 사내
+  MediaWiki에 페이지로 자동 업로드됨 (`wiki_upload.upload_paths_to_wiki()`). 페이지 제목은 파일명, 본문은
+  `register.py`의 텍스트 추출기로 뽑은 내용 그대로. "분류선택"은 위키에 이미 있는 분류 중 골라서 적용
+  (`site.allcategories()`로 실시간 조회), "분류텍스트 입력"은 새 분류명을 직접 타이핑. 진행률바/로그는
+  Qdrant 등록과 동일한 영역을 공유하고, `self.busy` 플래그도 공유하므로 Qdrant 등록과 위키 업로드를
+  동시에 돌릴 수는 없음(하나 끝나야 다음 시작)
 - 등록 진행 상태·오류가 전부 하단 리스트박스에 실시간 표시 (콘솔 창 없음)
 - 등록은 백그라운드 스레드에서 실행되어 처리 중에도 창이 멈추지 않음
 

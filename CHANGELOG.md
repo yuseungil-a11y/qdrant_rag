@@ -5,6 +5,20 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.0.0
+
+- **주요 기능**: 하나의 GUI(`gui.py`)에서 Qdrant 등록과 **위키(MediaWiki) 문서 등록을 함께 사용**할 수 있도록 통합.
+  - 새 모듈 `wiki_upload.py`: 문서를 MediaWiki 페이지로 자동 업로드. 예전 `Proposal_to_wikiUpload.py`가
+    win32com으로 Excel/한글/PowerPoint를 직접 열어 PDF로 변환한 뒤 텍스트를 뽑던 것과 달리, 이미 있는
+    `register.py`의 텍스트 추출기(PDF/PPTX/PPT/XLSX/HWPX/HWP/DOCX/DOC/HTML/TXT/MD, 전부 순수 Python)를
+    재사용 - Office 설치나 Windows 종속성 없이 macOS/Linux에서도 동일하게 동작
+  - GUI에 "위키 문서 등록" 섹션 추가: 전용 드래그 앤 드롭 영역, 파일/폴더 선택, "분류선택"(위키에 있는
+    분류 중 골라서 적용)/"분류텍스트 입력"(새 분류명 직접 입력) 버튼. 기존 진행률 표시줄·로그창을 그대로 공유
+  - 접속 정보(`key.txt`)를 `config.json`의 `wiki_site_url`/`wiki_path`/`wiki_username`/`wiki_password`/
+    `wiki_category`로 이전 - 다른 설정과 마찬가지로 한 곳에서 관리하고 git에는 올라가지 않음
+- **마이너 기능**: Qdrant 등록 지원 형식에 HTML(`.html`/`.htm`) 추가. `lxml.html`로 `<script>`/`<style>`을
+  제거하고 블록 요소(문단/제목/리스트 등) 경계에 줄바꿈을 넣어 읽기 좋은 텍스트로 추출 (`register.read_html`).
+
 ## 1.1.3
 
 - **버그 수정**: macOS `.app` 번들로 빌드하면 `config.json`/`incoming`/`extracted_images`/`extracted_text`가

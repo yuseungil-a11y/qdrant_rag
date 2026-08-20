@@ -1,7 +1,8 @@
 r"""
-Qdrant 문서 등록 GUI
+Qdrant 문서 등록 GUI (+ wiki 문서 등록 통합)
 - 탐색기에서 파일/폴더를 드래그 앤 드롭하면 register.py의 등록 로직을 그대로 실행
-- register.py가 print()로 찍는 진행 상태/오류 메시지를 하단 리스트박스에 그대로 표시
+- 하단 "위키 문서 등록" 섹션에서는 같은 파일들을 wiki_upload.py로 MediaWiki에 자동 업로드
+- register.py/wiki_upload.py가 print()로 찍는 진행 상태/오류 메시지를 하단 리스트박스에 그대로 표시
 
 사전 설치:
     pip install tkinterdnd2
@@ -16,7 +17,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 # PyInstaller --windowed(콘솔 없음)로 빌드하면 sys.stdout/stderr가 None이 되어,
 # register.py가 import 시점(config.json 로드 등)에 찍는 print()가 바로 죽는다.
@@ -33,8 +34,9 @@ except ImportError:
     DND_AVAILABLE = False
 
 import register
+import wiki_upload
 
-APP_VERSION = "1.1.3"
+APP_VERSION = "2.0.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -293,14 +295,46 @@ class App:
             my_search_frame, text="선택 항목 삭제", fg="#a33", command=self.start_delete_my_selected,
         ).pack(anchor="e", padx=5, pady=5)
 
+        # --- 위키 문서 등록 (wiki_upload.py, MediaWiki 자동 업로드) ---
+        wiki_frame = tk.LabelFrame(top, text="위키 문서 등록")
+        wiki_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        self.wiki_drop_label = tk.Label(
+            wiki_frame,
+            text="여기로 파일/폴더를 드래그 앤 드롭하면 위키에 업로드\n(여러 개 동시 선택 가능)",
+            relief="ridge", bd=2, height=4, bg="#f5f5f5", fg="#333333",
+            font=(KOREAN_FONT, 11), justify="center",
+        )
+        self.wiki_drop_label.pack(fill="x", padx=5, pady=5)
+
+        wiki_btn_frame = tk.Frame(wiki_frame)
+        wiki_btn_frame.pack(fill="x", padx=5)
+        tk.Button(wiki_btn_frame, text="파일 선택...", command=self.browse_wiki_files).pack(side="left")
+        tk.Button(wiki_btn_frame, text="폴더 선택...", command=self.browse_wiki_folder).pack(side="left", padx=5)
+
+        wiki_category_row = tk.Frame(wiki_frame)
+        wiki_category_row.pack(fill="x", padx=5, pady=5)
+        tk.Label(wiki_category_row, text="현재 분류:").pack(side="left")
+        self.wiki_category_var = tk.StringVar(value=wiki_upload.get_wiki_config()["wiki_category"])
+        tk.Label(wiki_category_row, textvariable=self.wiki_category_var, fg="#0a5", anchor="w").pack(
+            side="left", fill="x", expand=True, padx=(5, 5)
+        )
+        tk.Button(wiki_category_row, text="분류선택", command=self.choose_wiki_category).pack(side="left")
+        tk.Button(wiki_category_row, text="분류텍스트 입력", command=self.type_wiki_category).pack(
+            side="left", padx=(5, 0)
+        )
+
         if DND_AVAILABLE:
             self.drop_label.drop_target_register(DND_FILES)
             self.drop_label.dnd_bind("<<Drop>>", self.on_drop)
+            self.wiki_drop_label.drop_target_register(DND_FILES)
+            self.wiki_drop_label.dnd_bind("<<Drop>>", self.on_wiki_drop)
         else:
             self.drop_label.config(
                 text="드래그 앤 드롭을 쓰려면 'pip install tkinterdnd2' 필요\n"
                      "(지금은 아래 버튼으로 파일/폴더를 선택하세요)"
             )
+            self.wiki_drop_label.config(text="드래그 앤 드롭을 쓰려면 'pip install tkinterdnd2' 필요")
 
         self.msg_queue: queue.Queue[str] = queue.Queue()
         self.progress_queue: queue.Queue[dict] = queue.Queue()
@@ -667,6 +701,108 @@ class App:
             total += await register.delete_mine_by_metadata(item.get("metadata", {}))
         print(f"개인 저장소 선택 삭제 완료: 총 {total}개 항목 삭제")
         return total
+
+    # --- 위키 문서 등록 ---
+
+    def on_wiki_drop(self, event):
+        self.start_wiki_upload(parse_drop_paths(event.data))
+
+    def browse_wiki_files(self):
+        files = filedialog.askopenfilenames(title="위키에 올릴 파일 선택")
+        if files:
+            self.start_wiki_upload([Path(f) for f in files])
+
+    def browse_wiki_folder(self):
+        folder = filedialog.askdirectory(title="위키에 올릴 폴더 선택")
+        if folder:
+            self.start_wiki_upload([Path(folder)])
+
+    def choose_wiki_category(self):
+        if self.busy:
+            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
+            return
+        self.status_label.config(text="분류 조회 중...")
+        threading.Thread(target=self.run_fetch_wiki_categories, daemon=True).start()
+
+    def run_fetch_wiki_categories(self):
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        writer = QueueWriter(self.msg_queue)
+        sys.stdout = writer
+        sys.stderr = writer
+        cats = None
+        try:
+            site = wiki_upload.get_wiki_site()
+            cats = wiki_upload.list_wiki_categories(site)
+        except Exception as e:
+            self.log(f"[오류] 위키 분류 목록 조회 실패: {e}")
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+        if cats is not None:
+            self.root.after(0, lambda: self.show_wiki_category_picker(cats))
+
+    def show_wiki_category_picker(self, categories: list[str]):
+        win = tk.Toplevel(self.root)
+        win.title("위키 분류 선택")
+        win.geometry("300x400")
+        tk.Label(win, text="목록에서 분류를 선택하세요 (더블클릭으로도 선택)").pack(anchor="w", padx=10, pady=(10, 5))
+
+        frame = tk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10)
+        scrollbar = tk.Scrollbar(frame)
+        scrollbar.pack(side="right", fill="y")
+        listbox = tk.Listbox(frame, yscrollcommand=scrollbar.set)
+        for c in categories:
+            listbox.insert("end", c)
+        listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=listbox.yview)
+
+        def on_select():
+            sel = listbox.curselection()
+            if sel:
+                self.wiki_category_var.set(listbox.get(sel[0]))
+                win.destroy()
+
+        tk.Button(win, text="선택", command=on_select).pack(pady=10)
+        listbox.bind("<Double-Button-1>", lambda e: on_select())
+
+    def type_wiki_category(self):
+        value = simpledialog.askstring(
+            "분류 입력", "적용할 분류명을 입력하세요:", initialvalue=self.wiki_category_var.get(), parent=self.root,
+        )
+        if value is not None and value.strip():
+            self.wiki_category_var.set(value.strip())
+
+    def start_wiki_upload(self, paths: list[Path]):
+        if self.busy:
+            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
+            return
+        if not paths:
+            return
+        self.busy = True
+        self.status_label.config(text="위키 업로드 중...")
+        self.progress_bar["value"] = 0
+        self.progress_label.config(text="0%")
+        self.file_progress_label.config(text="파일 -/-")
+        self.unit_progress_label.config(text="")
+        category = self.wiki_category_var.get().strip()
+        threading.Thread(target=self.run_wiki_upload, args=(paths, category), daemon=True).start()
+
+    def run_wiki_upload(self, paths: list[Path], category: str):
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        writer = QueueWriter(self.msg_queue)
+        sys.stdout = writer
+        sys.stderr = writer
+        try:
+            wiki_upload.upload_paths_to_wiki(paths, category, progress_callback=self.progress_queue.put)
+        except Exception as e:
+            self.log(f"[오류] {e}")
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            self.busy = False
+            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
 
 
 def main():

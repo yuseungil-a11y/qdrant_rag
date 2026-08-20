@@ -6,7 +6,7 @@ r"""
 
 지원 파일 형식:
     PDF(.pdf), Word(.docx/.doc), 한글(.hwp/.hwpx), 엑셀(.xlsx),
-    파워포인트(.pptx/.ppt), 텍스트(.txt/.md), 이미지(.jpg/.jpeg/.png)
+    파워포인트(.pptx/.ppt), 텍스트(.txt/.md), HTML(.html/.htm), 이미지(.jpg/.jpeg/.png)
 
 사용법:
     python register.py
@@ -638,6 +638,34 @@ def process_ppt(path: Path, progress_callback=None) -> tuple[str, list[dict]]:
         shutil.rmtree(converted.parent, ignore_errors=True)
 
 
+_HTML_BLOCK_TAGS = {
+    "p", "div", "br", "li", "tr", "table", "section", "article",
+    "header", "footer", "blockquote", "pre",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+}
+
+
+def read_html(path: Path) -> str:
+    """HTML에서 태그/스크립트/스타일을 제거하고 실제로 보이는 본문 텍스트만 추출."""
+    import lxml.html as lh
+
+    # 바이트를 그대로 넘기면 lxml이 <meta charset>이 없는 파일에서 인코딩을 잘못
+    # 추정해 한글이 깨진다. 미리 utf-8로 디코딩한 문자열을 넘겨 그 문제를 피한다.
+    raw_text = path.read_text(encoding="utf-8", errors="ignore")
+    tree = lh.fromstring(raw_text)
+    for bad in tree.xpath("//script | //style"):
+        bad.getparent().remove(bad)
+    # text_content()는 블록 요소 경계에 줄바꿈을 넣어주지 않아 문단이 다 붙어버리므로,
+    # 블록 태그 뒤에 직접 줄바꿈을 끼워 넣는다.
+    for el in tree.iter():
+        if el.tag in _HTML_BLOCK_TAGS:
+            el.tail = (el.tail or "") + "\n"
+    text = tree.text_content()
+    # 여러 줄 공백을 하나로 정리해서 읽기 좋게
+    lines = [line.strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
 def read_text_only(path: Path) -> str:
     """이미지 처리가 필요 없는 포맷(또는 텍스트만 필요한 호출)을 위한 텍스트 전용 추출.
     .pdf/.pptx/.ppt/.xlsx/.hwpx는 이미지까지 함께 뽑는 process_*() 함수를 register_file()에서 직접 사용."""
@@ -649,6 +677,8 @@ def read_text_only(path: Path) -> str:
             return read_doc(path)
         if ext == ".hwp":
             return read_hwp(path)
+        if ext in (".html", ".htm"):
+            return read_html(path)
         if ext in (".txt", ".md"):
             return path.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:

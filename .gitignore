@@ -3,6 +3,7 @@ __pycache__/
 build/
 dist/
 config.json
+key.txt
 incoming/
 extracted_images/
 extracted_text/
