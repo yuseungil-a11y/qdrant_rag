@@ -7,3 +7,8 @@ key.txt
 incoming/
 extracted_images/
 extracted_text/
+
+# 실제 위키 계정/비밀번호가 하드코딩된 예전 참고 스크립트 - wiki_upload.py로 대체됨, git엔 올리지 않음
+site_to_mediawikiupload.py
+# 개인 작업용 뉴스 스크랩 목록(실제 제목/링크) - incoming/과 같은 이유로 제외
+sites.txt

@@ -5,6 +5,16 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.1.0
+
+- **마이너 기능**: "위키 문서 등록" 섹션 아래에 **"URL 목록으로 위키 등록"** 추가. 제목/URL을 한 줄씩
+  번갈아 텍스트박스에 붙여넣으면 각 URL을 스크랩해서 별도의 위키 페이지로 업로드. 예전
+  `site_to_mediawikiupload.py` + `sites.txt` 파일 조합을 대체 - 파일 편집 없이 GUI에서 바로 붙여넣기
+  (`wiki_upload.upload_sites_to_wiki()`, 형식/제목 정제/카테고리 태그는 원본 스크립트와 동일하게 유지)
+  - 원본 스크립트가 쓰던 `truststore.inject_into_ssl()`은 일부러 빼고 순수 `requests`만 사용 - 그
+    함수는 전역으로 `ssl.SSLContext`를 패치해서, 1.1.0에서 고쳤던 "Python 3.14 + truststore 조합
+    SSL 무한 재귀" 버그를 다시 일으킬 위험이 있었음
+
 ## 2.0.0
 
 - **주요 기능**: 하나의 GUI(`gui.py`)에서 Qdrant 등록과 **위키(MediaWiki) 문서 등록을 함께 사용**할 수 있도록 통합.

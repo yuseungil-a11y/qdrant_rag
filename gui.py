@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -323,6 +323,31 @@ class App:
         tk.Button(wiki_category_row, text="분류텍스트 입력", command=self.type_wiki_category).pack(
             side="left", padx=(5, 0)
         )
+
+        # --- URL 목록으로 위키 등록 (sites.txt 형식을 파일 대신 텍스트박스에 붙여넣기) ---
+        site_frame = tk.LabelFrame(top, text="URL 목록으로 위키 등록")
+        site_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        tk.Label(
+            site_frame, text="제목 한 줄, URL 한 줄을 번갈아 붙여넣으세요 (빈 줄/# 주석은 무시됨)",
+            fg="#666666", anchor="w",
+        ).pack(fill="x", padx=5, pady=(5, 0))
+
+        site_text_frame = tk.Frame(site_frame)
+        site_text_frame.pack(fill="x", padx=5, pady=(2, 5))
+        site_scrollbar = tk.Scrollbar(site_text_frame)
+        site_scrollbar.pack(side="right", fill="y")
+        self.site_text = tk.Text(site_text_frame, height=8, wrap="word", yscrollcommand=site_scrollbar.set)
+        self.site_text.pack(side="left", fill="both", expand=True)
+        site_scrollbar.config(command=self.site_text.yview)
+
+        site_category_row = tk.Frame(site_frame)
+        site_category_row.pack(fill="x", padx=5, pady=(0, 5))
+        tk.Label(site_category_row, text="분류:").pack(side="left")
+        self.site_category_var = tk.StringVar(value=wiki_upload.SITE_UPLOAD_DEFAULT_CATEGORY)
+        self.site_category_entry = tk.Entry(site_category_row, textvariable=self.site_category_var)
+        self.site_category_entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
+        tk.Button(site_category_row, text="URL 위키에 업로드", command=self.start_site_upload).pack(side="left")
 
         if DND_AVAILABLE:
             self.drop_label.drop_target_register(DND_FILES)
@@ -796,6 +821,40 @@ class App:
         sys.stderr = writer
         try:
             wiki_upload.upload_paths_to_wiki(paths, category, progress_callback=self.progress_queue.put)
+        except Exception as e:
+            self.log(f"[오류] {e}")
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            self.busy = False
+            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+
+    # --- URL 목록으로 위키 등록 ---
+
+    def start_site_upload(self):
+        if self.busy:
+            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
+            return
+        text = self.site_text.get("1.0", "end").strip()
+        if not text:
+            self.log("[알림] 제목/URL을 붙여넣으세요.")
+            return
+        self.busy = True
+        self.status_label.config(text="URL 위키 업로드 중...")
+        self.progress_bar["value"] = 0
+        self.progress_label.config(text="0%")
+        self.file_progress_label.config(text="파일 -/-")
+        self.unit_progress_label.config(text="")
+        category = self.site_category_var.get().strip()
+        threading.Thread(target=self.run_site_upload, args=(text, category), daemon=True).start()
+
+    def run_site_upload(self, text: str, category: str):
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        writer = QueueWriter(self.msg_queue)
+        sys.stdout = writer
+        sys.stderr = writer
+        try:
+            wiki_upload.upload_sites_to_wiki(text, category, progress_callback=self.progress_queue.put)
         except Exception as e:
             self.log(f"[오류] {e}")
         finally:

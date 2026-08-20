@@ -14,15 +14,24 @@ r"""
     예전 key.txt는 더 이상 쓰지 않음 (config.json으로 통합).
 """
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 import mwclient
+import requests
 import urllib3
+from bs4 import BeautifulSoup
 
 import register
 
 # 사내 위키가 사설 인증서를 쓰는 경우가 많아 검증을 끔 (Proposal_to_wikiUpload.py와 동일)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 참고: 예전 site_to_mediawikiupload.py는 truststore.inject_into_ssl()로 OS 인증서 저장소를
+# 쓰게 했었는데, 그건 전역으로 ssl.SSLContext를 몽키패치하는 방식이라 register.py에서 이미
+# 겪었던 "Python 3.14 + truststore 조합에서 SSL 요청이 무한 재귀에 빠지는" 버그를 이 모듈에서도
+# 다시 일으킬 수 있다. 뉴스 스크래핑엔 필요 없는 기능이라 일부러 쓰지 않는다.
 
 WIKI_DEFAULT_CONFIG = {
     "wiki_site_url": "example.com",
@@ -140,6 +149,109 @@ def upload_paths_to_wiki(paths: list[Path], category: str, progress_callback=Non
             try:
                 progress_callback({
                     "file_index": i, "file_total": total, "file_name": f.name,
+                    "unit_index": 1, "unit_total": 1, "unit_label": "업로드",
+                })
+            except Exception:
+                pass
+
+    print(f"모든 작업 완료. {ok}/{total}개 업로드 성공.")
+    return ok, total
+
+
+# ---------------------------------------------------------------
+# URL 목록(제목/URL 번갈아 붙여넣기)을 스크랩해서 각각 위키 페이지로 업로드.
+# 예전 site_to_mediawikiupload.py + sites.txt 파일을 대체 - 파일 대신 GUI 텍스트
+# 붙여넣기 박스에서 바로 읽어온다.
+# ---------------------------------------------------------------
+SITE_UPLOAD_DEFAULT_CATEGORY = "ITS동향"
+
+_TITLE_STRIP_RE = re.compile(r"[\[\]{}|#<>%+?]")
+
+
+def clean_wiki_title(title: str) -> str:
+    """미디어위키 문서 제목에 쓸 수 없는 특수문자를 제거하고, 맨 앞 '-'도 지운다."""
+    cleaned = _TITLE_STRIP_RE.sub("", title).strip()
+    if cleaned.startswith("-"):
+        cleaned = cleaned.lstrip("-").strip()
+    return cleaned
+
+
+def escape_mediawiki_brackets(text: str) -> str:
+    """본문 속 [ ]가 위키 링크로 오작동하지 않도록 이스케이프."""
+    if not text:
+        return ""
+    return text.replace("[", "&#91;").replace("]", "&#93;")
+
+
+def scrape_url_content(url: str) -> str:
+    """URL을 받아 본문으로 보이는 텍스트만 뽑는다 (article/main/#content 우선, 없으면 body 전체)."""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScraperBot/1.1"}
+    response = requests.get(url, headers=headers, timeout=15)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    content_tag = soup.find("article") or soup.find("main") or soup.find("div", id="content")
+    if content_tag is None:
+        content_tag = soup.body
+    return content_tag.get_text(separator="\n", strip=True) if content_tag else ""
+
+
+def parse_site_pairs(text: str) -> list[tuple[str, str]]:
+    """"제목" 한 줄, "URL" 한 줄이 번갈아 나오는 텍스트를 파싱 (빈 줄/#주석 무시).
+    예전 sites.txt와 완전히 같은 형식 - 파일 대신 텍스트박스에서 붙여넣은 내용을 그대로 받는다."""
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+    pairs = []
+    for i in range(0, len(lines), 2):
+        if i + 1 >= len(lines):
+            print(f"[안내] 짝이 맞지 않아 건너뜀(URL 누락): {lines[i]}")
+            break
+        pairs.append((lines[i], lines[i + 1]))
+    return pairs
+
+
+def upload_sites_to_wiki(
+    text: str, category: str = SITE_UPLOAD_DEFAULT_CATEGORY, progress_callback=None
+) -> tuple[int, int]:
+    """붙여넣은 "제목/URL" 목록을 하나씩 스크랩해서 위키 페이지로 업로드.
+    (성공 개수, 전체 개수) 반환."""
+    pairs = parse_site_pairs(text)
+    if not pairs:
+        print("업로드할 URL이 없습니다. '제목' 한 줄, 'URL' 한 줄 형식으로 번갈아 입력하세요.")
+        return 0, 0
+
+    print(f"위키 로그인 중...")
+    site = get_wiki_site()
+    print(f"로그인 성공. 분류: {category or '(없음)'}, 대상 {len(pairs)}건")
+
+    date_prefix = datetime.now().strftime("%Y-%m-%d")
+    total = len(pairs)
+    ok = 0
+
+    for i, (raw_title, url) in enumerate(pairs, start=1):
+        doc_name = f"{date_prefix} {clean_wiki_title(raw_title)}"
+        try:
+            body_text = scrape_url_content(url)
+            safe_body = escape_mediawiki_brackets(body_text)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            category_tag = f"\n\n[[Category:{category}]]" if category else ""
+            wiki_content = (
+                f"== {doc_name} 자동 업데이트 ==\n\n"
+                f"* '''출처:''' {url}\n"
+                f"* '''마지막 수집:''' {now_str}\n\n"
+                f"----\n\n"
+                f"{safe_body}"
+                f"{category_tag}"
+            )
+            page = site.pages[doc_name]
+            page.save(wiki_content, summary=f"URL 붙여넣기 업로드 ({now_str})")
+            print(f"업로드 완료: {doc_name} ({url})")
+            ok += 1
+        except Exception as e:
+            print(f"[오류] {raw_title} ({url}): {e}")
+
+        if progress_callback:
+            try:
+                progress_callback({
+                    "file_index": i, "file_total": total, "file_name": doc_name,
                     "unit_index": 1, "unit_total": 1, "unit_label": "업로드",
                 })
             except Exception:
