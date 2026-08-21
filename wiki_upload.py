@@ -99,10 +99,31 @@ def extract_text(path: Path) -> str:
     return register.read_text_only(path)
 
 
-def upload_text_to_wiki(site: mwclient.Site, title: str, text: str, category: str) -> None:
+def upload_file_attachment(site: mwclient.Site, path: Path, comment: str) -> str | None:
+    """원본 파일을 미디어위키에 첨부파일(File:)로 업로드한다.
+    위키 서버 설정(허용 확장자/용량 제한 등)에 따라 거부될 수 있는데, 그건 첨부만 못 올리는
+    것일 뿐 본문 텍스트 등록 자체를 막을 이유는 없으므로 실패해도 예외를 올리지 않고 None만 반환한다.
+    성공하면 실제로 저장된 파일명(문서 안 [[Media:...]] 링크에 쓸 이름)을 반환한다."""
+    filename = clean_wiki_title(path.name) or path.name
+    try:
+        with open(path, "rb") as fh:
+            info = site.upload(file=fh, filename=filename, comment=comment, ignore=True)
+        return info.get("filename") or filename
+    except Exception as e:
+        print(f"[안내] 첨부파일 업로드 실패(본문 텍스트는 정상 등록됨): {path.name}: {e}")
+        return None
+
+
+def upload_text_to_wiki(
+    site: mwclient.Site, title: str, text: str, category: str, attached_filename: str | None = None
+) -> None:
     if not text.strip():
         raise ValueError("추출된 텍스트가 없습니다.")
-    body = f"{text}\n\n[[분류:{category}]]" if category else text
+    body = text
+    if attached_filename:
+        body += f"\n\n== 첨부파일 ==\n* [[Media:{attached_filename}|{attached_filename}]]"
+    if category:
+        body += f"\n\n[[분류:{category}]]"
     page = site.pages[title]
     page.save(body, summary="Qdrant 문서 등록 프로그램에서 자동 업로드")
 
@@ -139,8 +160,12 @@ def upload_paths_to_wiki(paths: list[Path], category: str, progress_callback=Non
             if not text.strip():
                 print(f"건너뜀(내용 없음): {f.name}")
             else:
-                upload_text_to_wiki(site, title, text, category)
-                print(f"업로드 완료: {title}")
+                attached_filename = upload_file_attachment(
+                    site, f, "Qdrant 문서 등록 프로그램에서 자동 업로드"
+                )
+                upload_text_to_wiki(site, title, text, category, attached_filename)
+                suffix = f" (첨부파일: {attached_filename})" if attached_filename else ""
+                print(f"업로드 완료: {title}{suffix}")
                 ok += 1
         except Exception as e:
             print(f"[오류] {f.name}: {e}")
