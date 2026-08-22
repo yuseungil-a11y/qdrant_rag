@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -222,7 +222,10 @@ class App:
         paste_text_frame.pack(fill="x", padx=5)
         paste_scrollbar = tk.Scrollbar(paste_text_frame)
         paste_scrollbar.pack(side="right", fill="y")
-        self.paste_text = tk.Text(paste_text_frame, height=6, wrap="word", yscrollcommand=paste_scrollbar.set)
+        self.paste_text = tk.Text(
+            paste_text_frame, height=6, wrap="word", yscrollcommand=paste_scrollbar.set,
+            relief="solid", bd=1,
+        )
         self.paste_text.pack(side="left", fill="both", expand=True)
         paste_scrollbar.config(command=self.paste_text.yview)
 
@@ -342,7 +345,10 @@ class App:
         site_text_frame.pack(fill="x", padx=5, pady=(2, 5))
         site_scrollbar = tk.Scrollbar(site_text_frame)
         site_scrollbar.pack(side="right", fill="y")
-        self.site_text = tk.Text(site_text_frame, height=8, wrap="word", yscrollcommand=site_scrollbar.set)
+        self.site_text = tk.Text(
+            site_text_frame, height=8, wrap="word", yscrollcommand=site_scrollbar.set,
+            relief="solid", bd=1,
+        )
         self.site_text.pack(side="left", fill="both", expand=True)
         site_scrollbar.config(command=self.site_text.yview)
 
