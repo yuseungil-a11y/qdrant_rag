@@ -128,10 +128,13 @@ def upload_text_to_wiki(
     page.save(body, summary="Qdrant 문서 등록 프로그램에서 자동 업로드")
 
 
-def upload_paths_to_wiki(paths: list[Path], category: str, progress_callback=None) -> tuple[int, int]:
+def upload_paths_to_wiki(
+    paths: list[Path], category: str, progress_callback=None, upload_attachment: bool = False
+) -> tuple[int, int]:
     """파일/폴더 목록을 위키에 업로드. (성공 개수, 전체 개수) 반환.
     progress_callback은 gui.py의 update_progress_display가 기대하는 것과 같은
-    {"file_index","file_total","file_name","unit_index","unit_total","unit_label"} dict를 받는다."""
+    {"file_index","file_total","file_name","unit_index","unit_total","unit_label"} dict를 받는다.
+    upload_attachment가 True일 때만 원본 파일도 첨부파일(File:)로 함께 업로드한다 (기본은 텍스트만)."""
     files = []
     for p in paths:
         if not p.exists():
@@ -160,9 +163,11 @@ def upload_paths_to_wiki(paths: list[Path], category: str, progress_callback=Non
             if not text.strip():
                 print(f"건너뜀(내용 없음): {f.name}")
             else:
-                attached_filename = upload_file_attachment(
-                    site, f, "Qdrant 문서 등록 프로그램에서 자동 업로드"
-                )
+                attached_filename = None
+                if upload_attachment:
+                    attached_filename = upload_file_attachment(
+                        site, f, "Qdrant 문서 등록 프로그램에서 자동 업로드"
+                    )
                 upload_text_to_wiki(site, title, text, category, attached_filename)
                 suffix = f" (첨부파일: {attached_filename})" if attached_filename else ""
                 print(f"업로드 완료: {title}{suffix}")

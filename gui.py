@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.3.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -311,6 +311,11 @@ class App:
         wiki_btn_frame.pack(fill="x", padx=5)
         tk.Button(wiki_btn_frame, text="파일 선택...", command=self.browse_wiki_files).pack(side="left")
         tk.Button(wiki_btn_frame, text="폴더 선택...", command=self.browse_wiki_folder).pack(side="left", padx=5)
+        # 기본값은 항상 꺼짐(체크 안 함) - 첨부 업로드는 위키 서버 용량/속도 부담이 있어 필요할 때만 켜서 사용
+        self.wiki_attach_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            wiki_btn_frame, text="첨부파일 업로드", variable=self.wiki_attach_var,
+        ).pack(side="left", padx=(10, 0))
 
         wiki_category_row = tk.Frame(wiki_frame)
         wiki_category_row.pack(fill="x", padx=5, pady=5)
@@ -812,15 +817,20 @@ class App:
         self.file_progress_label.config(text="파일 -/-")
         self.unit_progress_label.config(text="")
         category = self.wiki_category_var.get().strip()
-        threading.Thread(target=self.run_wiki_upload, args=(paths, category), daemon=True).start()
+        upload_attachment = self.wiki_attach_var.get()
+        threading.Thread(
+            target=self.run_wiki_upload, args=(paths, category, upload_attachment), daemon=True
+        ).start()
 
-    def run_wiki_upload(self, paths: list[Path], category: str):
+    def run_wiki_upload(self, paths: list[Path], category: str, upload_attachment: bool):
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
         sys.stderr = writer
         try:
-            wiki_upload.upload_paths_to_wiki(paths, category, progress_callback=self.progress_queue.put)
+            wiki_upload.upload_paths_to_wiki(
+                paths, category, progress_callback=self.progress_queue.put, upload_attachment=upload_attachment
+            )
         except Exception as e:
             self.log(f"[오류] {e}")
         finally:
