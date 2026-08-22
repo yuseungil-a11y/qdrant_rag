@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -336,10 +336,16 @@ class App:
         site_frame = tk.LabelFrame(top, text="URL 목록으로 위키 등록")
         site_frame.pack(fill="x", padx=10, pady=(10, 0))
 
+        site_label_row = tk.Frame(site_frame)
+        site_label_row.pack(fill="x", padx=5, pady=(5, 0))
         tk.Label(
-            site_frame, text="제목 한 줄, URL 한 줄을 번갈아 붙여넣으세요 (빈 줄/# 주석은 무시됨)",
+            site_label_row, text="제목 한 줄, URL 한 줄을 번갈아 붙여넣으세요 (빈 줄/# 주석은 무시됨)",
             fg="#666666", anchor="w",
-        ).pack(fill="x", padx=5, pady=(5, 0))
+        ).pack(side="left", fill="x", expand=True)
+        tk.Button(
+            site_label_row, text="붙여넣기",
+            command=lambda: self._paste_from_clipboard(self.site_text),
+        ).pack(side="right")
 
         site_text_frame = tk.Frame(site_frame)
         site_text_frame.pack(fill="x", padx=5, pady=(2, 5))
