@@ -56,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
@@ -290,6 +291,8 @@ def encode_image_base64(img_path: Path) -> str:
 
 
 OCR_MAX_SIDE = 2000  # OCR은 300dpi 안팎이면 충분해서, 이보다 큰 이미지는 축소 후 OCR (정확도 손실은 미미, 속도는 크게 향상)
+OCR_MIN_SIDE = 1600  # 해상도 낮은 이미지(특히 인포그래픽 속 작은 글자 라벨)는 업스케일해야 OCR 정확도가
+# 크게 오름 - 예: 670x354짜리 인포그래픽은 원본으로 OCR하면 거의 다 깨지지만, 4배 키우면 대부분 정상 인식됨
 
 
 def ocr_image(img_path: Path) -> str:
@@ -297,8 +300,13 @@ def ocr_image(img_path: Path) -> str:
         return ""
     try:
         img = Image.open(img_path)
-        if max(img.size) > OCR_MAX_SIDE:
-            scale = OCR_MAX_SIDE / max(img.size)
+        longest_side = max(img.size)
+        if longest_side < OCR_MIN_SIDE:
+            scale = OCR_MIN_SIDE / longest_side
+            new_size = (round(img.width * scale), round(img.height * scale))
+            img = img.resize(new_size, Image.LANCZOS)
+        elif longest_side > OCR_MAX_SIDE:
+            scale = OCR_MAX_SIDE / longest_side
             new_size = (round(img.width * scale), round(img.height * scale))
             img = img.resize(new_size, Image.LANCZOS)
         return pytesseract.image_to_string(img, lang="kor+eng").strip()
@@ -696,30 +704,55 @@ def read_text_only(path: Path) -> str:
 TEXT_BATCH_SIZE = 25
 IMAGE_BATCH_SIZE = 3
 UPLOAD_CONCURRENCY = 8  # 배치 툴이 없는 게이트웨이용 폴백: 개별 저장 호출을 이만큼 동시에 전송
+STORE_MAX_RETRIES = 3  # 저장 실패 시 재시도 횟수 (배치 재시도 + 개별 폴백 재시도 각각에 적용)
+STORE_RETRY_DELAY = 2  # 재시도 사이 대기 시간(초)
+
+
+async def _call_store_with_retry(session: ClientSession, store_tool: str, info: str, metadata: dict) -> bool:
+    """단일 항목 저장을 최대 STORE_MAX_RETRIES번 재시도. 성공하면 True를 반환하고,
+    끝내 실패하면 어떤 항목이 실패했는지(제목/페이지) 알아볼 수 있게 로그를 남긴다."""
+    message = ""
+    for attempt in range(1, STORE_MAX_RETRIES + 1):
+        try:
+            result = await session.call_tool(store_tool, {"information": info, "metadata": metadata})
+        except Exception as e:
+            message = str(e)
+        else:
+            if not getattr(result, "isError", False):
+                return True
+            message = "\n".join(b.text for b in result.content if hasattr(b, "text")) or str(result)
+        if attempt < STORE_MAX_RETRIES:
+            await asyncio.sleep(STORE_RETRY_DELAY)
+    label = metadata.get("title") or metadata.get("source") or "?"
+    page = metadata.get("page")
+    where = f"{label}" + (f" ({page}페이지)" if page is not None else "")
+    print(f"[오류] {STORE_MAX_RETRIES}번 재시도했지만 저장 실패 - {where}: {message}")
+    return False
 
 
 async def _store_group_individually(
     session: ClientSession, group: list[tuple[str, dict]], store_tool: str,
     progress_callback, unit_label: str, done: int, total: int,
-) -> int:
-    """배치 저장 툴이 없는(구버전) 게이트웨이용 폴백. 개별 qdrant-store 호출을
-    UPLOAD_CONCURRENCY개씩 동시에 보내 순차 호출보다 훨씬 빠르게 처리한다."""
+) -> tuple[int, list[tuple[str, dict]]]:
+    """배치 저장 툴이 없거나 배치 저장 자체가 실패한 경우의 폴백. 개별 저장 호출을
+    UPLOAD_CONCURRENCY개씩 동시에 보내고, 항목마다 실패하면 재시도한다.
+    반환: (갱신된 done 카운트, 실제로 저장 성공한 (information, metadata) 목록)."""
     sem = asyncio.Semaphore(UPLOAD_CONCURRENCY)
     lock = asyncio.Lock()
+    succeeded: list[tuple[str, dict]] = []
 
     async def store_one(info: str, metadata: dict):
         nonlocal done
         async with sem:
-            result = await session.call_tool(store_tool, {"information": info, "metadata": metadata})
-        if getattr(result, "isError", False):
-            message = "\n".join(b.text for b in result.content if hasattr(b, "text")) or str(result)
-            print(f"[오류] {message}")
+            ok = await _call_store_with_retry(session, store_tool, info, metadata)
         async with lock:
             done += 1
+            if ok:
+                succeeded.append((info, metadata))
             _report(progress_callback, done, total, unit_label)
 
     await asyncio.gather(*(store_one(info, metadata) for info, metadata in group))
-    return done
+    return done, succeeded
 
 
 async def _store_in_batches(
@@ -727,38 +760,76 @@ async def _store_in_batches(
     progress_callback=None, unit_label: str = "저장",
 ) -> list[tuple[str, dict]]:
     """(information, metadata) 목록을 batch_size개씩 묶어 배치 저장 툴로 전송.
-    게이트웨이가 아직 배치 툴을 지원하지 않으면("Unknown tool") 개별 동시 저장으로 자동 전환."""
+    게이트웨이가 아직 배치 툴을 지원하지 않으면("Unknown tool") 개별 동시 저장으로 자동 전환.
+
+    배치 저장이 실패하면 같은 배치를 최대 STORE_MAX_RETRIES번 재시도하고, 그래도 실패하면
+    그 배치만 항목별 저장(각 항목도 자체 재시도)으로 다시 시도한다 - 배치 안의 한 항목만
+    문제여도 배치 전체가 죽는 걸 막기 위함. 반환값은 실제로 저장에 "성공"한 항목만 담으므로
+    (덤프 파일도 이 반환값을 그대로 쓰기 때문에) 재시도 후에도 실패한 항목은 덤프에도,
+    이후 조회 결과에도 남지 않는다 - 예전처럼 실패해도 성공한 것처럼 기록되지 않는다."""
     if not records:
         return []
     batch_tool = "qdrant_store_mine_batch" if store_tool == "qdrant_store_mine" else "qdrant_store_batch"
     total = len(records)
     use_batch = True
     done = 0
+    succeeded: list[tuple[str, dict]] = []
 
     for start in range(0, total, batch_size):
         group = records[start:start + batch_size]
 
         if use_batch:
             items = [{"information": info, "metadata": metadata} for info, metadata in group]
-            result = await session.call_tool(batch_tool, {"items": items})
-            if getattr(result, "isError", False):
-                message = "\n".join(b.text for b in result.content if hasattr(b, "text")) or str(result)
-                if "Unknown tool" in message:
-                    print(f"[안내] {batch_tool} 툴이 게이트웨이에 아직 없어 개별 동시 저장으로 전환합니다.")
-                    use_batch = False
-                else:
-                    print(f"[오류] {message}")
-                    done = min(start + batch_size, total)
-                    _report(progress_callback, done, total, unit_label)
-                    continue
-            else:
+            batch_ok = False
+            last_message = ""
+            for attempt in range(1, STORE_MAX_RETRIES + 1):
+                result = await session.call_tool(batch_tool, {"items": items})
+                if not getattr(result, "isError", False):
+                    batch_ok = True
+                    break
+                last_message = "\n".join(b.text for b in result.content if hasattr(b, "text")) or str(result)
+                if "Unknown tool" in last_message:
+                    break
+                if attempt < STORE_MAX_RETRIES:
+                    await asyncio.sleep(STORE_RETRY_DELAY)
+
+            if batch_ok:
                 done = min(start + batch_size, total)
+                succeeded.extend(group)
                 _report(progress_callback, done, total, unit_label)
                 continue
 
-        done = await _store_group_individually(session, group, store_tool, progress_callback, unit_label, done, total)
+            if "Unknown tool" in last_message:
+                print(f"[안내] {batch_tool} 툴이 게이트웨이에 아직 없어 개별 동시 저장으로 전환합니다.")
+                use_batch = False
+            else:
+                print(
+                    f"[안내] 배치 저장을 {STORE_MAX_RETRIES}번 재시도했지만 실패해서 "
+                    f"이 묶음({len(group)}개)은 항목별로 다시 시도합니다: {last_message}"
+                )
 
-    return records
+        done, group_succeeded = await _store_group_individually(
+            session, group, store_tool, progress_callback, unit_label, done, total
+        )
+        succeeded.extend(group_succeeded)
+
+    failed_count = total - len(succeeded)
+    if failed_count > 0:
+        print(
+            f"[안내] {unit_label}: 총 {total}개 중 {failed_count}개는 재시도 후에도 끝내 저장 실패 "
+            f"(위 [오류] 로그에 어떤 항목인지 남아있습니다)"
+        )
+
+    return succeeded
+
+
+def normalize_source(value: str) -> str:
+    """macOS(APFS/HFS+)는 한글 등 조합 가능한 유니코드를 NFD(분해형)로 반환하는 경우가 많은데,
+    Windows/일반적으로 타이핑되는 문자열은 NFC(조합형)이다. 같은 파일이라도 등록한 OS에 따라
+    source/title 문자열의 바이트가 달라질 수 있고, 이러면 qdrant_view_image/삭제처럼 source를
+    정확히 일치시켜야 하는 조회가 조용히 실패한다 (겉보기엔 완전히 같은 문자열인데도).
+    Qdrant에 쓰거나 Qdrant에서 조회할 때 쓰는 source/title은 항상 이 함수로 NFC 통일한다."""
+    return unicodedata.normalize("NFC", value)
 
 
 async def register_text_chunks_raw(
@@ -769,6 +840,8 @@ async def register_text_chunks_raw(
     store_tool: "qdrant-store"(팀 공유) 또는 "qdrant_store_mine"(개인 저장소)."""
     if not text.strip():
         return []
+    source = normalize_source(source)
+    title = normalize_source(title)
     chunks = chunk_text(text)
     records = [
         (chunk, {"source": source, "title": title, "type": "text", "chunk_index": idx})
@@ -789,6 +862,8 @@ async def register_images(
     store_tool: str = "qdrant-store", progress_callback=None,
 ) -> list[tuple[str, dict]]:
     """Qdrant에 실제로 보낸 (information, metadata) 목록을 그대로 반환 (덤프 파일 작성에 재사용)."""
+    source = normalize_source(str(path))
+    title = normalize_source(path.name)
     records = []
     for meta in images_meta:
         if meta["page"] is not None:
@@ -804,7 +879,7 @@ async def register_images(
         info = "\n".join(parts)
 
         metadata = {
-            "source": str(path), "title": path.name,
+            "source": source, "title": title,
             "type": "image", "page": meta["page"],
             "image_index": meta["image_index"],
             "image_path": meta["image_path"],
@@ -1033,6 +1108,7 @@ async def delete_by_source(source: str) -> int:
     """source(등록 당시 파일 경로 또는 붙여넣은 텍스트의 source 문자열)에 해당하는 모든
     항목(텍스트+이미지)을 통째로 삭제한다. 실제로 삭제된 개수를 반환.
     되돌릴 수 없는 작업이므로 호출 전 UI 쪽에서 반드시 확인을 받아야 한다."""
+    source = normalize_source(source)
     deleted = await _call_qdrant_delete({"source": source})
     if deleted == 0:
         print(f"삭제할 항목이 없습니다: source={source!r}과 일치하는 데이터가 없습니다.")
