@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -201,7 +201,7 @@ class App:
             btn_frame, text="이미지 처리(추출/OCR/캡션)", variable=self.process_images_var,
         ).pack(side="left", padx=10)
 
-        self.status_label = tk.Label(btn_frame, text="대기 중", fg="#555555")
+        self.status_label = tk.Label(btn_frame, text="● 대기 중", fg="#555555")
         self.status_label.pack(side="right")
 
         paste_frame = tk.LabelFrame(top, text="텍스트 붙여넣기로 등록")
@@ -387,7 +387,28 @@ class App:
         self.msg_queue: queue.Queue[str] = queue.Queue()
         self.progress_queue: queue.Queue[dict] = queue.Queue()
         self.busy = False
+        self._status_base = ""
+        self._spinner_idx = 0
         self.root.after(100, self.poll_queue)
+
+    # 상태 표시줄을 정적 텍스트 대신 회전 스피너 + 색상으로 표시해, 처리 중인지 대기 중인지
+    # 한눈에 구분되도록 한다. self.busy가 True인 동안 150ms마다 스스로 다시 예약해서 도는
+    # 애니메이션이고, self.busy가 False가 되는 순간 다음 틱에서 스스로 멈추고 "대기 중"으로 복귀한다.
+    _SPINNER_FRAMES = ["◐", "◓", "◑", "◒"]
+
+    def set_status(self, text: str):
+        """작업 시작 시 호출 - 상태 표시줄에 회전 스피너 애니메이션을 켠다."""
+        self._status_base = text
+        self._animate_status()
+
+    def _animate_status(self):
+        if not self.busy:
+            self.status_label.config(text="● 대기 중", fg="#555555")
+            return
+        frame = self._SPINNER_FRAMES[self._spinner_idx % len(self._SPINNER_FRAMES)]
+        self._spinner_idx += 1
+        self.status_label.config(text=f"{frame} {self._status_base}", fg="#1a73e8")
+        self.root.after(150, self._animate_status)
 
     def log(self, msg: str):
         self.msg_queue.put(msg)
@@ -453,7 +474,7 @@ class App:
             self.log("[알림] 개인/공용 저장소 중 하나 이상을 체크하세요.")
             return
         self.busy = True
-        self.status_label.config(text="처리 중...")
+        self.set_status("처리 중")
         self.progress_bar["value"] = 0
         self.progress_label.config(text="0%")
         self.file_progress_label.config(text="파일 -/-")
@@ -481,7 +502,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     def _paste_from_clipboard(self, widget):
         try:
@@ -516,7 +537,7 @@ class App:
             if not proceed:
                 return
         self.busy = True
-        self.status_label.config(text="처리 중...")
+        self.set_status("처리 중")
         self.progress_bar["value"] = 0
         self.progress_label.config(text="0%")
         self.file_progress_label.config(text="파일 -/-")
@@ -544,7 +565,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     def browse_delete_source(self):
         # 등록 때 파일 선택/드래그로 넘어가는 경로 형식(str(Path(...)))과 맞춰서
@@ -569,7 +590,7 @@ class App:
         ):
             return
         self.busy = True
-        self.status_label.config(text="삭제 중...")
+        self.set_status("삭제 중")
         threading.Thread(target=self.run_delete, args=(source,), daemon=True).start()
 
     def run_delete(self, source: str):
@@ -585,7 +606,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     def start_search(self):
         if self.busy:
@@ -596,7 +617,7 @@ class App:
             self.log("[알림] 검색어를 입력하세요.")
             return
         self.busy = True
-        self.status_label.config(text="검색 중...")
+        self.set_status("검색 중")
         threading.Thread(target=self.run_search, args=(query,), daemon=True).start()
 
     def run_search(self, query: str):
@@ -613,7 +634,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     def populate_search_results(self, results: list[dict]):
         self.search_results = results
@@ -655,7 +676,7 @@ class App:
         ):
             return
         self.busy = True
-        self.status_label.config(text="삭제 중...")
+        self.set_status("삭제 중")
         threading.Thread(target=self.run_delete_selected, args=(selected,), daemon=True).start()
 
     def run_delete_selected(self, selected: list[dict]):
@@ -673,7 +694,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     @staticmethod
     async def _delete_selected(selected: list[dict]) -> int:
@@ -692,7 +713,7 @@ class App:
             self.log("[알림] 검색어를 입력하세요.")
             return
         self.busy = True
-        self.status_label.config(text="검색 중...")
+        self.set_status("검색 중")
         threading.Thread(target=self.run_my_search, args=(query,), daemon=True).start()
 
     def run_my_search(self, query: str):
@@ -709,7 +730,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     def populate_my_search_results(self, results: list[dict]):
         self.my_search_results = results
@@ -745,7 +766,7 @@ class App:
         ):
             return
         self.busy = True
-        self.status_label.config(text="삭제 중...")
+        self.set_status("삭제 중")
         threading.Thread(target=self.run_delete_my_selected, args=(selected,), daemon=True).start()
 
     def run_delete_my_selected(self, selected: list[dict]):
@@ -763,7 +784,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     @staticmethod
     async def _delete_my_selected(selected: list[dict]) -> int:
@@ -792,7 +813,8 @@ class App:
         if self.busy:
             self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
             return
-        self.status_label.config(text="분류 조회 중...")
+        self.busy = True
+        self.set_status("분류 조회 중")
         threading.Thread(target=self.run_fetch_wiki_categories, daemon=True).start()
 
     def run_fetch_wiki_categories(self):
@@ -809,7 +831,8 @@ class App:
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.busy = False
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
         if cats is not None:
             self.root.after(0, lambda: self.show_wiki_category_picker(cats))
 
@@ -852,7 +875,7 @@ class App:
         if not paths:
             return
         self.busy = True
-        self.status_label.config(text="위키 업로드 중...")
+        self.set_status("위키 업로드 중")
         self.progress_bar["value"] = 0
         self.progress_label.config(text="0%")
         self.file_progress_label.config(text="파일 -/-")
@@ -878,7 +901,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     # --- URL 목록으로 위키 등록 ---
 
@@ -891,7 +914,7 @@ class App:
             self.log("[알림] 제목/URL을 붙여넣으세요.")
             return
         self.busy = True
-        self.status_label.config(text="URL 위키 업로드 중...")
+        self.set_status("URL 위키 업로드 중")
         self.progress_bar["value"] = 0
         self.progress_label.config(text="0%")
         self.file_progress_label.config(text="파일 -/-")
@@ -912,7 +935,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="대기 중"))
+            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
 
 def main():
