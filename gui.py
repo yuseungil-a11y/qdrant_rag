@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.4.1"
+APP_VERSION = "2.5.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -176,13 +176,19 @@ class App:
 
         target_frame = tk.Frame(top)
         target_frame.pack(fill="x", padx=10, pady=(0, 4))
-        # 기본값 개인 저장소 - 파일/폴더/드래그앤드롭/텍스트 붙여넣기 등록 전부 이 설정을 따른다.
-        # 팀 전체가 봐야 할 자료를 등록할 때만 체크 해제.
+        # 개인/공용은 서로 독립적인 체크박스 - 파일/폴더/드래그앤드롭/텍스트 붙여넣기 등록 전부
+        # 이 설정을 따른다. 둘 다 체크하면 같은 내용을 두 저장소 모두에 등록.
         self.personal_store_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
-            target_frame, text="개인 저장소에 등록 (체크 해제 시 팀 공유 저장소)",
+            target_frame, text="개인 저장소에 등록",
             variable=self.personal_store_var, font=(KOREAN_FONT, 10, "bold"),
         ).pack(side="left")
+        # 공용 저장소는 팀 전체가 보게 되므로 실수로 올리는 일이 없도록 기본값은 항상 꺼짐
+        self.shared_store_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            target_frame, text="공용 저장소에 등록",
+            variable=self.shared_store_var, font=(KOREAN_FONT, 10, "bold"),
+        ).pack(side="left", padx=(15, 0))
 
         btn_frame = tk.Frame(top)
         btn_frame.pack(fill="x", padx=10)
@@ -433,14 +439,18 @@ class App:
         if folder:
             self.start_registration([Path(folder)])
 
-    def current_store_tool(self) -> str:
-        return "qdrant_store_mine" if self.personal_store_var.get() else "qdrant-store"
+    def current_store_flags(self) -> tuple[bool, bool]:
+        return self.personal_store_var.get(), self.shared_store_var.get()
 
     def start_registration(self, paths: list[Path]):
         if self.busy:
             self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
             return
         if not paths:
+            return
+        personal, shared = self.current_store_flags()
+        if not personal and not shared:
+            self.log("[알림] 개인/공용 저장소 중 하나 이상을 체크하세요.")
             return
         self.busy = True
         self.status_label.config(text="처리 중...")
@@ -450,19 +460,21 @@ class App:
         self.unit_progress_label.config(text="")
         # tkinter 변수는 메인 스레드에서 읽고, 백그라운드 스레드에는 순수 값만 넘긴다
         process_images = self.process_images_var.get()
-        store_tool = self.current_store_tool()
-        threading.Thread(target=self.run_registration, args=(paths, process_images, store_tool), daemon=True).start()
+        threading.Thread(
+            target=self.run_registration, args=(paths, process_images, personal, shared), daemon=True
+        ).start()
 
-    def run_registration(self, paths: list[Path], process_images: bool, store_tool: str):
+    def run_registration(self, paths: list[Path], process_images: bool, personal: bool, shared: bool):
         register.PROCESS_IMAGES = process_images
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
         sys.stderr = writer
         try:
-            label = "개인 저장소" if store_tool == "qdrant_store_mine" else "팀 공유 저장소"
-            self.log(f"등록 대상: {label} / 이미지 처리: {'켜짐' if process_images else '꺼짐 (텍스트만 등록)'}")
-            asyncio.run(register.main(paths, progress_callback=self.progress_queue.put, store_tool=store_tool))
+            self.log(f"이미지 처리: {'켜짐' if process_images else '꺼짐 (텍스트만 등록)'}")
+            asyncio.run(
+                register.main(paths, progress_callback=self.progress_queue.put, personal=personal, shared=shared)
+            )
         except Exception as e:
             self.log(f"[오류] {e}")
         finally:
@@ -486,6 +498,10 @@ class App:
         if not text:
             self.log("[알림] 등록할 텍스트가 비어 있습니다.")
             return
+        personal, shared = self.current_store_flags()
+        if not personal and not shared:
+            self.log("[알림] 개인/공용 저장소 중 하나 이상을 체크하세요.")
+            return
         title = self.paste_title_entry.get().strip()
         if not title:
             # 제목 없이 등록하면 "(직접 입력) 붙여넣은 시각" 형식으로 자동 생성되어, 나중에
@@ -499,16 +515,17 @@ class App:
             )
             if not proceed:
                 return
-        store_tool = self.current_store_tool()
         self.busy = True
         self.status_label.config(text="처리 중...")
         self.progress_bar["value"] = 0
         self.progress_label.config(text="0%")
         self.file_progress_label.config(text="파일 -/-")
         self.unit_progress_label.config(text="")
-        threading.Thread(target=self.run_pasted_registration, args=(title, text, store_tool), daemon=True).start()
+        threading.Thread(
+            target=self.run_pasted_registration, args=(title, text, personal, shared), daemon=True
+        ).start()
 
-    def run_pasted_registration(self, title: str, text: str, store_tool: str):
+    def run_pasted_registration(self, title: str, text: str, personal: bool, shared: bool):
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
@@ -516,7 +533,7 @@ class App:
         try:
             asyncio.run(
                 register.register_pasted_text(
-                    title, text, progress_callback=self.progress_queue.put, store_tool=store_tool
+                    title, text, progress_callback=self.progress_queue.put, personal=personal, shared=shared
                 )
             )
             self.root.after(0, lambda: self.paste_text.delete("1.0", "end"))

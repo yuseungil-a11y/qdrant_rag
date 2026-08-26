@@ -59,6 +59,7 @@ import tempfile
 import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
+from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 
@@ -118,7 +119,8 @@ CONFIG_PATH = SCRIPT_DIR / "config.json"
 
 DEFAULT_CONFIG = {
     # 실제 서버 주소/키는 이 소스에 넣지 말고 config.json에서만 관리 (config.json은 git 추적 제외)
-    "mcp_url": "https://example.com/mcp?key=REPLACE_ME",
+    "mcp_url": "https://example.com/mcp?key=REPLACE_ME",  # 개인 저장소
+    "mcp_url_shared": "https://example.com/mcp?key=REPLACE_ME",  # 공용(팀 공유) 저장소 - 개인과 별도 서버/키
     "ollama_url": "http://localhost:11434/api/generate",
     "vision_model": "moondream",  # GPU 있으면 llava, qwen2.5vl 등으로 교체 가능
     "translate_model": "gemma3:4b",  # 캡션(영어)을 한글로 번역할 때 쓰는 일반 텍스트 LLM
@@ -153,6 +155,7 @@ def load_config() -> dict:
 
 CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
+MCP_URL_SHARED = CONFIG.get("mcp_url_shared", "")
 OLLAMA_URL = CONFIG["ollama_url"]
 VISION_MODEL = CONFIG["vision_model"]
 TRANSLATE_MODEL = CONFIG["translate_model"]
@@ -746,6 +749,32 @@ UPLOAD_CONCURRENCY = 8  # 배치 툴이 없는 게이트웨이용 폴백: 개별
 STORE_MAX_RETRIES = 3  # 저장 실패 시 재시도 횟수 (배치 재시도 + 개별 폴백 재시도 각각에 적용)
 STORE_RETRY_DELAY = 2  # 재시도 사이 대기 시간(초)
 
+# 개인/공용 저장소는 서로 다른 MCP 서버(URL)일 수 있어 별도 연결이 필요하다.
+# (store_tool, mcp_url) 튜플로 "어디에 어떤 툴로 저장할지"를 나타낸다.
+StoreTarget = tuple[str, str]
+
+
+def resolve_store_targets(personal: bool, shared: bool) -> list[StoreTarget]:
+    """체크박스 상태(개인/공용)에 따라 실제로 저장을 수행할 대상 목록을 만든다.
+    둘 다 켜져 있으면 둘 다 포함(파일당 두 곳에 저장), 둘 다 꺼져 있으면 빈 목록."""
+    targets: list[StoreTarget] = []
+    if personal:
+        targets.append(("qdrant_store_mine", MCP_URL))
+    if shared:
+        if not MCP_URL_SHARED:
+            print("[안내] config.json에 mcp_url_shared가 설정되지 않아 공용 저장소 등록을 건너뜁니다.")
+        else:
+            targets.append(("qdrant-store", MCP_URL_SHARED))
+    return targets
+
+
+def _target_label(store_tool: str) -> str:
+    return "개인 저장소" if store_tool == "qdrant_store_mine" else "공용 저장소"
+
+
+def store_targets_label(store_targets: list[StoreTarget]) -> str:
+    return ", ".join(_target_label(tool) for tool, _ in store_targets) or "(없음)"
+
 
 async def _call_store_with_retry(session: ClientSession, store_tool: str, info: str, metadata: dict) -> bool:
     """단일 항목 저장을 최대 STORE_MAX_RETRIES번 재시도. 성공하면 True를 반환하고,
@@ -872,11 +901,11 @@ def normalize_source(value: str) -> str:
 
 
 async def register_text_chunks_raw(
-    session: ClientSession, source: str, title: str, text: str,
-    store_tool: str = "qdrant-store", progress_callback=None,
+    sessions: list[tuple[ClientSession, str]], source: str, title: str, text: str, progress_callback=None,
 ) -> list[tuple[str, dict]]:
     """source/title을 직접 지정해서 텍스트를 등록 (파일이 아니라 붙여넣은 텍스트 등에도 재사용).
-    store_tool: "qdrant-store"(팀 공유) 또는 "qdrant_store_mine"(개인 저장소)."""
+    sessions: [(session, store_tool), ...] - 체크된 저장 대상 전부(개인/공용)에 동일한 내용을 저장.
+    반환값은 그 중 한 대상(보통 첫 번째, 즉 개인)의 저장 성공 목록을 대표로 사용 (덤프 파일용)."""
     if not text.strip():
         return []
     source = normalize_source(source)
@@ -886,19 +915,23 @@ async def register_text_chunks_raw(
         (chunk, {"source": source, "title": title, "type": "text", "chunk_index": idx})
         for idx, chunk in enumerate(chunks)
     ]
-    return await _store_in_batches(session, records, store_tool, TEXT_BATCH_SIZE, progress_callback, "저장")
+    result: list[tuple[str, dict]] = []
+    for session, store_tool in sessions:
+        stored = await _store_in_batches(session, records, store_tool, TEXT_BATCH_SIZE, progress_callback, "저장")
+        if not result:
+            result = stored
+    return result
 
 
 async def register_text_chunks(
-    session: ClientSession, path: Path, text: str, store_tool: str = "qdrant-store", progress_callback=None,
+    sessions: list[tuple[ClientSession, str]], path: Path, text: str, progress_callback=None,
 ) -> list[tuple[str, dict]]:
     """Qdrant에 실제로 보낸 (information, metadata) 목록을 그대로 반환 (덤프 파일 작성에 재사용)."""
-    return await register_text_chunks_raw(session, str(path), path.name, text, store_tool, progress_callback)
+    return await register_text_chunks_raw(sessions, str(path), path.name, text, progress_callback)
 
 
 async def register_images(
-    session: ClientSession, path: Path, images_meta: list[dict],
-    store_tool: str = "qdrant-store", progress_callback=None,
+    sessions: list[tuple[ClientSession, str]], path: Path, images_meta: list[dict], progress_callback=None,
 ) -> list[tuple[str, dict]]:
     """Qdrant에 실제로 보낸 (information, metadata) 목록을 그대로 반환 (덤프 파일 작성에 재사용)."""
     source = normalize_source(str(path))
@@ -934,7 +967,12 @@ async def register_images(
 
         records.append((info, metadata))
 
-    return await _store_in_batches(session, records, store_tool, IMAGE_BATCH_SIZE, progress_callback, "이미지 저장")
+    result: list[tuple[str, dict]] = []
+    for session, store_tool in sessions:
+        stored = await _store_in_batches(session, records, store_tool, IMAGE_BATCH_SIZE, progress_callback, "이미지 저장")
+        if not result:
+            result = stored
+    return result
 
 
 def write_extraction_dump_raw(dump_name: str, source_label: str,
@@ -978,14 +1016,14 @@ TEXT_AND_IMAGE_PROCESSORS = {
 }
 
 
-async def register_file(session: ClientSession, path: Path, progress_callback=None, store_tool: str = "qdrant-store"):
+async def register_file(sessions: list[tuple[ClientSession, str]], path: Path, progress_callback=None):
     ext = path.suffix.lower()
 
     if ext in TEXT_AND_IMAGE_PROCESSORS:
         text, images_meta = TEXT_AND_IMAGE_PROCESSORS[ext](path, progress_callback=progress_callback)
-        text_records = await register_text_chunks(session, path, text, store_tool, progress_callback)
+        text_records = await register_text_chunks(sessions, path, text, progress_callback)
         image_records = (
-            await register_images(session, path, images_meta, store_tool, progress_callback) if images_meta else []
+            await register_images(sessions, path, images_meta, progress_callback) if images_meta else []
         )
         write_extraction_dump(path, text_records, image_records)
         print(f"등록 완료: {path.name} (텍스트 {len(text_records)}청크, 이미지 {len(image_records)}개)")
@@ -1002,7 +1040,7 @@ async def register_file(session: ClientSession, path: Path, progress_callback=No
             "page": None, "image_index": 1, "image_path": str(path),
             "ocr_text": ocr_text, "caption": caption, "caption_ko": caption_ko,
         }]
-        image_records = await register_images(session, path, meta, store_tool, progress_callback)
+        image_records = await register_images(sessions, path, meta, progress_callback)
         write_extraction_dump(path, [], image_records)
         print(f"등록 완료: {path.name} (이미지 {len(image_records)}개)")
         return
@@ -1011,14 +1049,12 @@ async def register_file(session: ClientSession, path: Path, progress_callback=No
     if not text.strip():
         print(f"건너뜀(내용 없음): {path.name}")
         return
-    text_records = await register_text_chunks(session, path, text, store_tool, progress_callback)
+    text_records = await register_text_chunks(sessions, path, text, progress_callback)
     write_extraction_dump(path, text_records, [])
     print(f"등록 완료: {path.name} (텍스트 {len(text_records)}청크)")
 
 
-async def register_targets(
-    session: ClientSession, targets: list[Path], progress_callback=None, store_tool: str = "qdrant-store"
-):
+async def register_targets(sessions: list[tuple[ClientSession, str]], targets: list[Path], progress_callback=None):
     """파일/폴더가 섞인 경로 목록을 받아 실제 파일 목록으로 펼친 뒤 등록."""
     files = []
     for target in targets:
@@ -1050,14 +1086,20 @@ async def register_targets(
             except Exception:
                 pass
 
-        await register_file(session, f, progress_callback=_unit_progress, store_tool=store_tool)
+        await register_file(sessions, f, progress_callback=_unit_progress)
         _unit_progress(1, 1, "완료")  # 세부 진행률을 못 받는 포맷(.doc/.txt 등)도 파일 완료 시 확실히 갱신
 
 
-async def main(targets: Path | list[Path], progress_callback=None, store_tool: str = "qdrant-store"):
-    """store_tool: "qdrant-store"(팀 공유 저장소) 또는 "qdrant_store_mine"(개인 저장소)."""
+async def main(targets: Path | list[Path], progress_callback=None, personal: bool = True, shared: bool = False):
+    """personal/shared: 각각 개인/공용 저장소 등록 여부. 둘 다 True면 같은 내용을 두 곳 모두에 저장."""
     if isinstance(targets, Path):
         targets = [targets]
+
+    store_targets = resolve_store_targets(personal, shared)
+    if not store_targets:
+        print("[안내] 저장할 대상이 선택되지 않았습니다 (개인/공용 모두 체크 해제됨).")
+        return
+    print(f"등록 대상: {store_targets_label(store_targets)}")
 
     if not PROCESS_IMAGES:
         print("이미지 처리: config.json의 process_images=n 설정으로 꺼져 있음 (텍스트만 등록)")
@@ -1081,13 +1123,17 @@ async def main(targets: Path | list[Path], progress_callback=None, store_tool: s
     if not SOFFICE_CMD:
         print("참고: LibreOffice가 없어 구버전 .ppt(및 antiword 없을 때 .doc)는 건너뜁니다.")
 
-    async with streamablehttp_client(MCP_URL) as mcp_streams:
-        # mcp 버전에 따라 (read, write) 또는 (read, write, get_session_id)를 yield하므로
-        # 앞의 두 값만 안전하게 꺼내 쓴다.
-        read, write = mcp_streams[0], mcp_streams[1]
-        async with ClientSession(read, write) as session:
+    async with AsyncExitStack() as stack:
+        sessions = []
+        for tool, url in store_targets:
+            # mcp 버전에 따라 (read, write) 또는 (read, write, get_session_id)를 yield하므로
+            # 앞의 두 값만 안전하게 꺼내 쓴다.
+            mcp_streams = await stack.enter_async_context(streamablehttp_client(url))
+            read, write = mcp_streams[0], mcp_streams[1]
+            session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
-            await register_targets(session, targets, progress_callback=progress_callback, store_tool=store_tool)
+            sessions.append((session, tool))
+        await register_targets(sessions, targets, progress_callback=progress_callback)
 
     print("모든 작업 완료.")
     print(f"추출된 이미지는 여기 저장됨: {IMAGES_DIR}")
@@ -1100,22 +1146,30 @@ def _sanitize_filename(name: str) -> str:
 
 
 async def register_pasted_text(
-    title: str, text: str, progress_callback=None, store_tool: str = "qdrant-store"
+    title: str, text: str, progress_callback=None, personal: bool = True, shared: bool = False
 ) -> int:
     """탐색기 파일이 아니라 GUI에 직접 붙여넣은 텍스트를 Qdrant에 등록. 등록된 청크 수 반환.
-    store_tool: "qdrant-store"(팀 공유 저장소) 또는 "qdrant_store_mine"(개인 저장소)."""
+    personal/shared: 각각 개인/공용 저장소 등록 여부. 둘 다 True면 같은 내용을 두 곳 모두에 저장."""
     title = title.strip() or datetime.now().strftime("붙여넣은 텍스트 %Y-%m-%d %H:%M:%S")
     source = f"(직접 입력) {title}"
 
-    async with streamablehttp_client(MCP_URL) as mcp_streams:
-        read, write = mcp_streams[0], mcp_streams[1]
-        async with ClientSession(read, write) as session:
+    store_targets = resolve_store_targets(personal, shared)
+    if not store_targets:
+        print("[안내] 저장할 대상이 선택되지 않았습니다 (개인/공용 모두 체크 해제됨).")
+        return 0
+
+    async with AsyncExitStack() as stack:
+        sessions = []
+        for tool, url in store_targets:
+            mcp_streams = await stack.enter_async_context(streamablehttp_client(url))
+            read, write = mcp_streams[0], mcp_streams[1]
+            session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
-            records = await register_text_chunks_raw(session, source, title, text, store_tool, progress_callback)
+            sessions.append((session, tool))
+        records = await register_text_chunks_raw(sessions, source, title, text, progress_callback)
 
     write_extraction_dump_raw(_sanitize_filename(title), source, records, [])
-    label = "개인 저장소" if store_tool == "qdrant_store_mine" else "팀 공유 저장소"
-    print(f"등록 완료({label}): {title} (텍스트 {len(records)}청크)")
+    print(f"등록 완료({store_targets_label(store_targets)}): {title} (텍스트 {len(records)}청크)")
     return len(records)
 
 

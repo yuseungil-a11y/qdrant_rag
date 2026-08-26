@@ -72,7 +72,8 @@ Tesseract나 Ollama가 설치/실행되어 있지 않으면 해당 기능만 조
 
 ```json
 {
-  "mcp_url": "MCP 서버 주소 (인증서+API 키 적용된 고정 도메인 사용 중, cloudflared 미사용)",
+  "mcp_url": "개인 저장소 MCP 서버 주소 (인증서+API 키 적용된 고정 도메인 사용 중, cloudflared 미사용)",
+  "mcp_url_shared": "공용(팀 공유) 저장소 MCP 서버 주소 - 개인과 별도 서버/키. 비워두면 공용 등록은 건너뜀",
   "ollama_url": "http://localhost:11434/api/generate",
   "vision_model": "moondream",
   "tesseract_cmd": "Tesseract 실행 파일 경로",
@@ -93,7 +94,7 @@ Tesseract나 Ollama가 설치/실행되어 있지 않으면 해당 기능만 조
 
 ## GUI (`gui.py` / `qdrant_register_gui.exe`)
 
-- **상단 "개인 저장소에 등록" 체크박스** (기본값 **체크됨** = 개인): 파일 선택/폴더 선택/드래그 앤 드롭/텍스트 붙여넣기 **전부** 이 체크박스 하나로 등록 대상이 결정됨. 체크 해제하면 팀 공유 저장소로 바뀜. 내부적으로는 `register.main()`/`register.register_pasted_text()`에 `store_tool="qdrant_store_mine"` 또는 `"qdrant-store"`를 넘기는 것뿐이라, 텍스트 청크/이미지 등록 로직 자체는 완전히 동일하고 어느 MCP 툴을 호출하는지만 바뀜
+- **상단 "개인 저장소에 등록"/"공용 저장소에 등록" 체크박스** (개인: 기본값 **체크됨**, 공용: 기본값 **꺼짐**): 파일 선택/폴더 선택/드래그 앤 드롭/텍스트 붙여넣기 **전부** 이 두 체크박스로 등록 대상이 결정됨. 서로 독립적이라 **둘 다 체크하면 같은 내용이 두 저장소 모두에 등록**되고, 둘 다 해제하면 등록이 진행되지 않음(안내 메시지 출력). 개인은 `config.json`의 `mcp_url`, 공용은 별도 서버인 `mcp_url_shared`에 접속하며, 내부적으로는 `register.main()`/`register.register_pasted_text()`에 `personal`/`shared` 두 bool을 넘겨 체크된 대상마다 별도 MCP 연결을 열고 동일한 텍스트 청크/이미지를 저장함 (`register.resolve_store_targets()`)
 - 탐색기에서 파일/폴더를 **여러 개 드래그 앤 드롭**하면 바로 등록 시작 (`tkinterdnd2`)
 - "파일 선택.../폴더 선택..." 버튼으로도 등록 가능
 - **"이미지 처리" 체크박스**로 실행마다 이미지 처리 on/off (config.json 편집 불필요, 기본값은 항상 꺼짐)
