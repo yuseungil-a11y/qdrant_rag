@@ -121,9 +121,11 @@ DEFAULT_CONFIG = {
     "mcp_url": "https://example.com/mcp?key=REPLACE_ME",
     "ollama_url": "http://localhost:11434/api/generate",
     "vision_model": "moondream",  # GPU 있으면 llava, qwen2.5vl 등으로 교체 가능
+    "translate_model": "gemma3:4b",  # 캡션(영어)을 한글로 번역할 때 쓰는 일반 텍스트 LLM
     "tesseract_cmd": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     "process_images": "y",  # y: 이미지 추출/OCR/캡션 처리, n: 이미지는 건너뛰고 텍스트만 등록
     "store_image_base64": "y",  # y: 이미지 파일 자체를 base64로 인코딩해 Qdrant metadata에 함께 저장
+    "translate_caption": "y",  # y: 영어 캡션을 한글로도 번역해서 함께 저장, n: 영어 캡션만 저장(더 빠름)
 }
 
 MAX_BASE64_IMAGE_BYTES = 5 * 1024 * 1024  # 이보다 큰 이미지는 용량 문제로 base64 저장 생략
@@ -153,8 +155,10 @@ CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
 OLLAMA_URL = CONFIG["ollama_url"]
 VISION_MODEL = CONFIG["vision_model"]
+TRANSLATE_MODEL = CONFIG["translate_model"]
 PROCESS_IMAGES = parse_yn(CONFIG["process_images"])
 STORE_IMAGE_BASE64 = parse_yn(CONFIG["store_image_base64"])
+TRANSLATE_CAPTION = parse_yn(CONFIG["translate_caption"])
 
 CHUNK_SIZE = 1500  # 800 -> 1500: 청크 수 자체를 줄여 저장 요청/배치 수를 더 줄임 (검색 정밀도 손해는 미미)
 CHUNK_OVERLAP = 200
@@ -339,6 +343,36 @@ def caption_image(img_path: Path) -> str:
         return ""
 
 
+TRANSLATE_PROMPT_TEMPLATE = (
+    "Translate the following English image caption into natural Korean. "
+    "Reply with the Korean translation only, no explanation, no quotes:\n\n{text}"
+)
+
+
+def translate_to_korean(text: str) -> str:
+    """moondream이 생성한 영어 캡션을 일반 텍스트 LLM(TRANSLATE_MODEL)으로 한글 번역한다.
+    moondream 자체는 한글 출력 품질이 낮아 캡션 생성은 영어로 하고, 번역만 별도 모델에 맡기는 방식."""
+    if not text.strip():
+        return ""
+    try:
+        resp = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": TRANSLATE_MODEL,
+                "prompt": TRANSLATE_PROMPT_TEMPLATE.format(text=text),
+                "stream": False,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json().get("response", "").strip()
+    except requests.exceptions.ConnectionError:
+        return ""
+    except Exception as e:
+        print(f"    [캡션 번역 실패] {e}")
+        return ""
+
+
 MAX_IMAGES_PER_PAGE = 3  # 페이지/슬라이드/시트당 처리(추출+OCR+캡션)할 최대 이미지 수, 큰 순서대로
 MAX_IMAGES_NO_PAGE = 10  # hwpx처럼 고정 페이지 개념이 없는 문서에서 처리할 전체 이미지 수 상한
 MIN_IMAGE_SIDE = 80  # 이보다 작은 이미지(아이콘/장식용 라인 등)는 노이즈로 보고 건너뜀
@@ -365,12 +399,17 @@ def save_and_analyze_image(image_bytes: bytes, ext: str, img_out_dir: Path, base
 
     ocr_text = ocr_image(img_path)
     caption = caption_image(img_path)
-    status = [f"OCR {len(ocr_text)}자" if ocr_text else "OCR 없음", "캡션 O" if caption else "캡션 없음"]
+    caption_ko = translate_to_korean(caption) if caption and TRANSLATE_CAPTION else ""
+    status = [
+        f"OCR {len(ocr_text)}자" if ocr_text else "OCR 없음",
+        "캡션 O" if caption else "캡션 없음",
+        "번역 O" if caption_ko else "번역 없음" if TRANSLATE_CAPTION else "번역 꺼짐",
+    ]
     print(f"    이미지 추출: {img_filename} (" + ", ".join(status) + ")")
 
     return {
         "page": page, "image_index": index, "image_path": str(img_path),
-        "ocr_text": ocr_text, "caption": caption,
+        "ocr_text": ocr_text, "caption": caption, "caption_ko": caption_ko,
     }
 
 
@@ -872,6 +911,8 @@ async def register_images(
             parts = [f"[{path.name} 이미지]"]
         if meta["caption"]:
             parts.append(f"설명: {meta['caption']}")
+        if meta.get("caption_ko"):
+            parts.append(f"설명(한글): {meta['caption_ko']}")
         if meta["ocr_text"]:
             parts.append(f"이미지 내 텍스트(OCR): {meta['ocr_text']}")
         if not meta["caption"] and not meta["ocr_text"]:
@@ -884,6 +925,7 @@ async def register_images(
             "image_index": meta["image_index"],
             "image_path": meta["image_path"],
             "caption": meta["caption"],
+            "caption_ko": meta.get("caption_ko", ""),
         }
         if STORE_IMAGE_BASE64:
             img_b64 = encode_image_base64(Path(meta["image_path"]))
@@ -955,7 +997,11 @@ async def register_file(session: ClientSession, path: Path, progress_callback=No
             return
         ocr_text = ocr_image(path)
         caption = caption_image(path)
-        meta = [{"page": None, "image_index": 1, "image_path": str(path), "ocr_text": ocr_text, "caption": caption}]
+        caption_ko = translate_to_korean(caption) if caption and TRANSLATE_CAPTION else ""
+        meta = [{
+            "page": None, "image_index": 1, "image_path": str(path),
+            "ocr_text": ocr_text, "caption": caption, "caption_ko": caption_ko,
+        }]
         image_records = await register_images(session, path, meta, store_tool, progress_callback)
         write_extraction_dump(path, [], image_records)
         print(f"등록 완료: {path.name} (이미지 {len(image_records)}개)")

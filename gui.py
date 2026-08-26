@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.3.5"
+APP_VERSION = "2.4.1"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -487,6 +487,18 @@ class App:
             self.log("[알림] 등록할 텍스트가 비어 있습니다.")
             return
         title = self.paste_title_entry.get().strip()
+        if not title:
+            # 제목 없이 등록하면 "(직접 입력) 붙여넣은 시각" 형식으로 자동 생성되어, 나중에
+            # 검색/삭제할 때 이게 무슨 내용인지 알아보기 어렵다 - 실수로 빈 채로 등록하는 것을
+            # 막기 위해 확인창을 띄운다.
+            proceed = messagebox.askyesno(
+                "제목 없음",
+                "제목을 입력하지 않으면 붙여넣은 시각으로 제목이 자동 생성됩니다\n"
+                "(나중에 검색·삭제할 때 내용을 알아보기 어려울 수 있습니다).\n\n"
+                "제목 없이 계속 등록하시겠습니까?",
+            )
+            if not proceed:
+                return
         store_tool = self.current_store_tool()
         self.busy = True
         self.status_label.config(text="처리 중...")
