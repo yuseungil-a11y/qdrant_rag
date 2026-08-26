@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.5.1"
+APP_VERSION = "2.6.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -166,18 +166,15 @@ class App:
         ))
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
-        self.drop_label = tk.Label(
-            top,
-            text="여기로 파일/폴더를 드래그 앤 드롭하세요\n(여러 개 동시 선택 가능)",
-            relief="ridge", bd=2, height=6, bg="#f5f5f5", fg="#333333",
-            font=(KOREAN_FONT, 12), justify="center",
-        )
-        self.drop_label.pack(fill="x", padx=10, pady=10)
+        # --- Qdrant 문서 등록 (register.py, 벡터DB 등록 - AI가 내용을 검색/답변에 활용할 수 있게 함) ---
+        qdrant_frame = tk.LabelFrame(top, text="Qdrant 문서 등록")
+        qdrant_frame.pack(fill="x", padx=10, pady=(10, 0))
 
-        target_frame = tk.Frame(top)
-        target_frame.pack(fill="x", padx=10, pady=(0, 4))
-        # 개인/공용은 서로 독립적인 체크박스 - 파일/폴더/드래그앤드롭/텍스트 붙여넣기 등록 전부
-        # 이 설정을 따른다. 둘 다 체크하면 같은 내용을 두 저장소 모두에 등록.
+        # 개인/공용 체크박스는 파일/폴더/드래그앤드롭/텍스트 붙여넣기 등록 전부에 적용되는
+        # 가장 중요한 설정이라 이 섹션 맨 위에 배치 (등록 전에 먼저 확인하게 함)
+        target_frame = tk.Frame(qdrant_frame)
+        target_frame.pack(fill="x", padx=5, pady=(5, 4))
+        # 개인/공용은 서로 독립적인 체크박스 - 둘 다 체크하면 같은 내용을 두 저장소 모두에 등록.
         self.personal_store_var = tk.BooleanVar(value=True)
         tk.Checkbutton(
             target_frame, text="개인 저장소에 등록",
@@ -190,8 +187,22 @@ class App:
             variable=self.shared_store_var, font=(KOREAN_FONT, 10, "bold"),
         ).pack(side="left", padx=(15, 0))
 
-        btn_frame = tk.Frame(top)
-        btn_frame.pack(fill="x", padx=10)
+        tk.Label(
+            qdrant_frame,
+            text="문서를 Qdrant 벡터DB에 등록해서 AI가 내용을 검색하고 답변에 활용할 수 있게 합니다",
+            fg="#666666", anchor="w",
+        ).pack(fill="x", padx=5, pady=(0, 0))
+
+        self.drop_label = tk.Label(
+            qdrant_frame,
+            text="여기로 파일/폴더를 드래그 앤 드롭하면 Qdrant에 등록\n(여러 개 동시 선택 가능)",
+            relief="ridge", bd=2, height=6, bg="#f5f5f5", fg="#333333",
+            font=(KOREAN_FONT, 12), justify="center",
+        )
+        self.drop_label.pack(fill="x", padx=5, pady=5)
+
+        btn_frame = tk.Frame(qdrant_frame)
+        btn_frame.pack(fill="x", padx=5, pady=(0, 5))
         tk.Button(btn_frame, text="파일 선택...", command=self.browse_files).pack(side="left")
         tk.Button(btn_frame, text="폴더 선택...", command=self.browse_folder).pack(side="left", padx=5)
 
