@@ -1220,6 +1220,23 @@ async def delete_by_source(source: str) -> int:
 _FIND_ENTRY_RE = re.compile(r"<entry><content>(.*?)</content><metadata>(.*?)</metadata></entry>", re.S)
 
 
+def _keyword_filter(query: str, entries: list[dict]) -> list[dict]:
+    """qdrant-find/qdrant_find_mine은 의미(벡터 유사도) 기반 검색이라 관련도 임계값이 없어,
+    검색어와 전혀 무관해도 "그나마 가장 가까운" 결과를 항상 반환한다. "키워드로 검색"이라는
+    이름에 맞게, 검색어의 각 단어가 실제로 본문 또는 제목에 (대소문자 무시하고) 포함된
+    결과만 한 번 더 걸러서 남긴다."""
+    tokens = [t.lower() for t in query.split() if t]
+    if not tokens:
+        return entries
+    filtered = []
+    for entry in entries:
+        title = str(entry.get("metadata", {}).get("title", ""))
+        haystack = f"{entry.get('content', '')} {title}".lower()
+        if all(token in haystack for token in tokens):
+            filtered.append(entry)
+    return filtered
+
+
 async def search_qdrant(query: str) -> list[dict]:
     """qdrant-find로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
     삭제할 항목을 키워드로 찾아 고를 때 사용 (검색 자체는 아무것도 지우지 않음)."""
@@ -1262,7 +1279,7 @@ async def search_qdrant(query: str) -> list[dict]:
         except Exception:
             metadata = {}
         parsed.append({"content": content_text, "metadata": metadata})
-    return parsed
+    return _keyword_filter(query, parsed)
 
 
 async def delete_by_metadata(metadata: dict) -> int:
@@ -1337,7 +1354,7 @@ async def search_my_qdrant(query: str) -> list[dict]:
         except Exception:
             metadata = {}
         parsed.append({"content": content_text, "metadata": metadata})
-    return parsed
+    return _keyword_filter(query, parsed)
 
 
 async def delete_mine_by_metadata(metadata: dict) -> int:
