@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.6.1"
+APP_VERSION = "2.7.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -115,6 +115,7 @@ class App:
         version_bar = tk.Frame(root)
         version_bar.pack(side="top", fill="x", padx=10, pady=(4, 0))
         tk.Label(version_bar, text=f"v{APP_VERSION}", fg="#888888", font=(KOREAN_FONT, 8)).pack(side="right")
+        tk.Button(version_bar, text="설정...", command=self.open_settings_dialog).pack(side="right", padx=(0, 8))
 
         # 등록/삭제 관련 섹션이 계속 늘어나도 진행 상태 로그가 항상 보이도록,
         # 아래쪽(진행률+로그)은 창에 고정하고 위쪽 콘텐츠만 스크롤되게 분리한다.
@@ -420,6 +421,42 @@ class App:
         self._spinner_idx += 1
         self.status_label.config(text=f"{frame} {self._status_base}", fg="#1a73e8")
         self.root.after(150, self._animate_status)
+
+    def open_settings_dialog(self):
+        """개인/공용 저장소 MCP 서버 URL을 config.json 파일을 직접 열지 않고 GUI에서 등록/편집."""
+        win = tk.Toplevel(self.root)
+        win.title("설정")
+        win.geometry("560x200")
+        win.transient(self.root)
+
+        tk.Label(
+            win, text="개인 저장소 URL (mcp_url):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(12, 0))
+        personal_entry = tk.Entry(win)
+        personal_entry.insert(0, register.CONFIG.get("mcp_url", ""))
+        personal_entry.pack(fill="x", padx=10, pady=(2, 10))
+
+        tk.Label(
+            win, text="공용 저장소 URL (mcp_url_shared):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(0, 0))
+        shared_entry = tk.Entry(win)
+        shared_entry.insert(0, register.CONFIG.get("mcp_url_shared", ""))
+        shared_entry.pack(fill="x", padx=10, pady=(2, 10))
+
+        def save():
+            personal = personal_entry.get().strip()
+            shared = shared_entry.get().strip()
+            if not personal:
+                messagebox.showwarning("입력 필요", "개인 저장소 URL은 비워둘 수 없습니다.", parent=win)
+                return
+            register.save_mcp_urls(personal, shared)
+            self.log("[안내] MCP 서버 설정을 저장했습니다 (config.json)")
+            win.destroy()
+
+        btn_row = tk.Frame(win)
+        btn_row.pack(fill="x", padx=10, pady=(4, 10))
+        tk.Button(btn_row, text="저장", command=save).pack(side="right")
+        tk.Button(btn_row, text="취소", command=win.destroy).pack(side="right", padx=(0, 6))
 
     def log(self, msg: str):
         self.msg_queue.put(msg)

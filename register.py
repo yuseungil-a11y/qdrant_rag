@@ -153,6 +153,18 @@ def load_config() -> dict:
     return {**DEFAULT_CONFIG, **data}
 
 
+def save_mcp_urls(mcp_url: str, mcp_url_shared: str) -> None:
+    """GUI의 설정 화면에서 개인/공용 MCP 서버 URL을 수정했을 때 호출한다.
+    config.json에 저장하고, 이미 로드되어 있는 MCP_URL/MCP_URL_SHARED 전역값도 즉시 갱신해
+    앱을 재시작하지 않아도 다음 등록/검색/삭제부터 바로 새 URL을 쓰게 한다."""
+    global MCP_URL, MCP_URL_SHARED
+    CONFIG["mcp_url"] = mcp_url
+    CONFIG["mcp_url_shared"] = mcp_url_shared
+    CONFIG_PATH.write_text(json.dumps(CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
+    MCP_URL = mcp_url
+    MCP_URL_SHARED = mcp_url_shared
+
+
 CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
 MCP_URL_SHARED = CONFIG.get("mcp_url_shared", "")
