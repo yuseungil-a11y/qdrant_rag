@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.8.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -423,10 +423,11 @@ class App:
         self.root.after(150, self._animate_status)
 
     def open_settings_dialog(self):
-        """개인/공용 저장소 MCP 서버 URL을 config.json 파일을 직접 열지 않고 GUI에서 등록/편집."""
+        """개인/공용 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를 config.json 파일을
+        직접 열지 않고 GUI에서 등록/편집."""
         win = tk.Toplevel(self.root)
         win.title("설정")
-        win.geometry("560x200")
+        win.geometry("560x340")
         win.transient(self.root)
 
         tk.Label(
@@ -443,6 +444,29 @@ class App:
         shared_entry.insert(0, register.CONFIG.get("mcp_url_shared", ""))
         shared_entry.pack(fill="x", padx=10, pady=(2, 10))
 
+        wiki_cfg = wiki_upload.get_wiki_config()
+
+        tk.Label(
+            win, text="위키 로그인 계정 (wiki_username):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(0, 0))
+        wiki_user_entry = tk.Entry(win)
+        wiki_user_entry.insert(0, wiki_cfg.get("wiki_username", ""))
+        wiki_user_entry.pack(fill="x", padx=10, pady=(2, 10))
+
+        tk.Label(
+            win, text="위키 로그인 비밀번호 (wiki_password):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(0, 0))
+        wiki_pw_row = tk.Frame(win)
+        wiki_pw_row.pack(fill="x", padx=10, pady=(2, 10))
+        wiki_pw_entry = tk.Entry(wiki_pw_row, show="*")
+        wiki_pw_entry.insert(0, wiki_cfg.get("wiki_password", ""))
+        wiki_pw_entry.pack(side="left", fill="x", expand=True)
+        wiki_pw_show_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            wiki_pw_row, text="표시", variable=wiki_pw_show_var,
+            command=lambda: wiki_pw_entry.config(show="" if wiki_pw_show_var.get() else "*"),
+        ).pack(side="left", padx=(6, 0))
+
         def save():
             personal = personal_entry.get().strip()
             shared = shared_entry.get().strip()
@@ -450,7 +474,8 @@ class App:
                 messagebox.showwarning("입력 필요", "개인 저장소 URL은 비워둘 수 없습니다.", parent=win)
                 return
             register.save_mcp_urls(personal, shared)
-            self.log("[안내] MCP 서버 설정을 저장했습니다 (config.json)")
+            wiki_upload.save_wiki_credentials(wiki_user_entry.get().strip(), wiki_pw_entry.get())
+            self.log("[안내] MCP 서버/위키 로그인 설정을 저장했습니다 (config.json)")
             win.destroy()
 
         btn_row = tk.Frame(win)

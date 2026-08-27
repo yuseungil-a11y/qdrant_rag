@@ -58,6 +58,17 @@ def get_wiki_config() -> dict:
     return {key: register.CONFIG[key] for key in WIKI_DEFAULT_CONFIG}
 
 
+def save_wiki_credentials(username: str, password: str) -> None:
+    """GUI의 설정 화면에서 위키 로그인 계정/비밀번호를 수정했을 때 호출한다.
+    config.json에 저장하고, 이미 로드되어 있는 register.CONFIG도 즉시 갱신해 앱을
+    재시작하지 않아도 다음 위키 업로드부터 바로 새 계정으로 로그인하게 한다."""
+    register.CONFIG["wiki_username"] = username
+    register.CONFIG["wiki_password"] = password
+    register.CONFIG_PATH.write_text(
+        json.dumps(register.CONFIG, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 def get_wiki_site(cfg: dict | None = None) -> mwclient.Site:
     """위키에 로그인한 mwclient.Site 객체를 반환."""
     cfg = cfg or get_wiki_config()
