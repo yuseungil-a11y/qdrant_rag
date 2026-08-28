@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.9.0"
+APP_VERSION = "2.9.1"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -668,10 +668,8 @@ class App:
             return
         if not messagebox.askyesno(
             "삭제 확인",
-            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 Qdrant에서 삭제합니다.\n"
-            "이 작업은 되돌릴 수 없습니다.\n\n" + source + "\n\n"
-            "(참고: 팀 공유 저장소는 정확히 삭제되지만, 개인 저장소는 검색 기반 최선 삭제라 "
-            "청크가 아주 많은 파일이면 일부가 남을 수 있습니다.)",
+            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 팀 공유 저장소와 개인 저장소 양쪽에서 "
+            "삭제합니다.\n이 작업은 되돌릴 수 없습니다.\n\n" + source,
         ):
             return
         self.busy = True

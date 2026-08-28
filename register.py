@@ -1202,22 +1202,23 @@ async def register_pasted_text(
     return len(records)
 
 
-async def _call_qdrant_delete(args: dict) -> int:
-    """게이트웨이의 qdrant_delete 툴을 호출해 실제로 삭제된 개수를 반환하는 저수준 헬퍼."""
+async def _call_delete_tool(tool_name: str, args: dict) -> int:
+    """게이트웨이의 삭제 툴(qdrant_delete 또는 qdrant_delete_mine)을 호출해 실제로 삭제된
+    개수를 반환하는 공통 저수준 헬퍼. 두 툴 다 {"deleted": N} 반환 형태가 동일하다."""
     async with streamablehttp_client(MCP_URL) as mcp_streams:
         read, write = mcp_streams[0], mcp_streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool("qdrant_delete", args)
+            result = await session.call_tool(tool_name, args)
 
     if getattr(result, "isError", False):
         message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
         print(f"[오류] {message}")
         return 0
 
-    # qdrant_delete는 {"deleted": N}을 반환한다. FastMCP는 이를 structuredContent(dict)와
-    # content(JSON 문자열 TextContent)로 함께 실어 보내므로, structuredContent를 우선 쓰고
-    # 없으면 content의 JSON 문자열을 파싱하는 순서로 안전하게 꺼낸다.
+    # {"deleted": N}을 반환한다. FastMCP는 이를 structuredContent(dict)와 content(JSON 문자열
+    # TextContent)로 함께 실어 보내므로, structuredContent를 우선 쓰고 없으면 content의 JSON
+    # 문자열을 파싱하는 순서로 안전하게 꺼낸다.
     deleted = None
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
@@ -1231,6 +1232,11 @@ async def _call_qdrant_delete(args: dict) -> int:
                 except Exception:
                     pass
     return deleted or 0
+
+
+async def _call_qdrant_delete(args: dict) -> int:
+    """게이트웨이의 qdrant_delete(팀 공유) 툴을 호출하는 저수준 헬퍼."""
+    return await _call_delete_tool("qdrant_delete", args)
 
 
 async def delete_by_source(source: str) -> int:
@@ -1357,61 +1363,24 @@ async def search_my_qdrant(query: str) -> list[dict]:
 
 
 async def delete_mine_by_source(source: str) -> int:
-    """개인 저장소는 게이트웨이의 qdrant_delete_mine이 source 필터를 지원하지 않고 정확한
-    point_id 목록만 받는다 (team 저장소의 qdrant_delete와 다름). 그래서 "파일 하나 통째로
-    삭제"를 흉내내려면: 파일명으로 의미 기반 검색을 한 번 돌려서 그 결과 중 source가 정확히
-    일치하는 것들의 point_id를 모아 지우는 수밖에 없다.
-
-    **주의**: 이건 어디까지나 최선 노력(best-effort)이다. 의미 기반 검색은 관련도 상위 결과만
-    반환하므로, 청크가 아주 많은 파일이면 일부가 검색 결과에 안 걸려서 못 지워질 수 있다.
-    "삭제 완료"가 떠도 완전히 다 지워졌다는 보장은 아니라서, 호출부(GUI)는 반드시 이 사실을
-    사용자에게 알려야 한다."""
+    """개인 저장소에서 source(파일 경로)에 해당하는 항목을 전부 삭제한다.
+    게이트웨이의 qdrant_delete_mine이 이제 qdrant_delete와 동일하게 source 서버 사이드 정확
+    필터를 지원하므로(예전엔 point_id만 받아서, 파일명으로 의미 기반 검색 → 결과 중 source
+    일치하는 point_id 수집 → 삭제, 하는 최선 노력 우회를 썼었음 - 검색 limit 때문에 청크가
+    많은 파일은 일부가 안 지워질 위험이 있었다), qdrant_delete와 완전히 동일하게 신뢰할 수
+    있다 - 검색을 거치지 않고 바로 정확히 매칭되는 만큼만 지운다."""
     source = normalize_source(source)
-    query = Path(source).stem if not source.startswith("(") else source
-    candidates = await _raw_find("qdrant_find_mine", query)
-    point_ids = [
-        entry["metadata"]["_id"] for entry in candidates
-        if normalize_source(str(entry.get("metadata", {}).get("source", ""))) == source
-        and entry.get("metadata", {}).get("_id")
-    ]
-    if not point_ids:
-        print(f"개인 저장소: 삭제할 항목을 찾지 못했습니다: {source!r}")
-        return 0
-
-    async with streamablehttp_client(MCP_URL) as mcp_streams:
-        read, write = mcp_streams[0], mcp_streams[1]
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool("qdrant_delete_mine", {"point_ids": point_ids})
-
-    if getattr(result, "isError", False):
-        message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
-        print(f"[오류] {message}")
-        return 0
-
-    deleted = None
-    structured = getattr(result, "structuredContent", None)
-    if isinstance(structured, dict):
-        deleted = structured.get("deleted")
-    if deleted is None:
-        for block in result.content:
-            if hasattr(block, "text"):
-                try:
-                    deleted = json.loads(block.text).get("deleted")
-                    break
-                except Exception:
-                    pass
-    deleted = deleted or 0
-    print(
-        f"개인 저장소: {deleted}개 항목 삭제 (검색 기반 최선 삭제라 일부가 검색에 안 걸려 "
-        f"남아있을 수 있음 - 확실히 하려면 키워드 검색으로 다시 확인하세요): {source!r}"
-    )
+    deleted = await _call_delete_tool("qdrant_delete_mine", {"source": source})
+    if deleted == 0:
+        print(f"개인 저장소: 삭제할 항목이 없습니다: {source!r}")
+    else:
+        print(f"개인 저장소: {deleted}개 항목 삭제: {source!r}")
     return deleted
 
 
 async def delete_from_all(source: str) -> int:
-    """팀 공유(qdrant_delete, source 정확 필터) + 개인 저장소(qdrant_delete_mine, 검색 기반
-    최선 삭제) 양쪽에서 이 source에 해당하는 항목을 전부 지운다. "파일 단위 삭제" GUI가 쓴다."""
+    """팀 공유(qdrant_delete)와 개인 저장소(qdrant_delete_mine) 양쪽 다 source 정확 필터로
+    이 source에 해당하는 항목을 전부 지운다. "파일 단위 삭제" GUI가 쓴다."""
     deleted_shared = await delete_by_source(source)
     deleted_mine = await delete_mine_by_source(source)
     return deleted_shared + deleted_mine
