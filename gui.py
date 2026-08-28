@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.8.0"
+APP_VERSION = "2.9.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -487,25 +487,35 @@ class App:
         self.msg_queue.put(msg)
 
     def poll_queue(self):
+        # 이 메서드는 100ms마다 스스로 재예약하는 방식으로 도는데, 안에서 예외가 나서 맨 아래
+        # self.root.after(100, self.poll_queue) 줄에 도달 못 하면 재예약이 끊겨서 로그/진행률
+        # 표시가 그 순간부터 앱을 재시작할 때까지 영구적으로 멈춘다 (실제로 이런 사례가 있었음 -
+        # progress_queue에 dict가 아닌 값이 잘못 들어와 update_progress_display가 예외를 던진
+        # 경우). 그래서 본문 전체를 try/finally로 감싸서, 무슨 일이 있어도 재예약만은 반드시
+        # 일어나게 한다.
         try:
-            while True:
-                line = self.msg_queue.get_nowait()
-                self.listbox.insert("end", line)
-                self.listbox.see("end")
-        except queue.Empty:
-            pass
+            try:
+                while True:
+                    line = self.msg_queue.get_nowait()
+                    self.listbox.insert("end", line)
+                    self.listbox.see("end")
+            except queue.Empty:
+                pass
 
-        # 진행률은 짧은 시간에 여러 번 들어올 수 있어 마지막 값만 반영
-        latest = None
-        try:
-            while True:
-                latest = self.progress_queue.get_nowait()
-        except queue.Empty:
-            pass
-        if latest is not None:
-            self.update_progress_display(latest)
-
-        self.root.after(100, self.poll_queue)
+            # 진행률은 짧은 시간에 여러 번 들어올 수 있어 마지막 값만 반영
+            latest = None
+            try:
+                while True:
+                    latest = self.progress_queue.get_nowait()
+            except queue.Empty:
+                pass
+            if latest is not None:
+                try:
+                    self.update_progress_display(latest)
+                except Exception:
+                    pass
+        finally:
+            self.root.after(100, self.poll_queue)
 
     def update_progress_display(self, info: dict):
         file_index, file_total = info["file_index"], info["file_total"]
@@ -659,7 +669,9 @@ class App:
         if not messagebox.askyesno(
             "삭제 확인",
             "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 Qdrant에서 삭제합니다.\n"
-            "이 작업은 되돌릴 수 없습니다.\n\n" + source,
+            "이 작업은 되돌릴 수 없습니다.\n\n" + source + "\n\n"
+            "(참고: 팀 공유 저장소는 정확히 삭제되지만, 개인 저장소는 검색 기반 최선 삭제라 "
+            "청크가 아주 많은 파일이면 일부가 남을 수 있습니다.)",
         ):
             return
         self.busy = True
@@ -672,7 +684,7 @@ class App:
         sys.stdout = writer
         sys.stderr = writer
         try:
-            asyncio.run(register.delete_by_source(source))
+            asyncio.run(register.delete_from_all(source))
         except Exception as e:
             self.log(f"[오류] {e}")
         finally:

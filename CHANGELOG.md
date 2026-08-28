@@ -5,6 +5,39 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.9.0
+
+- **버그 수정 겸 마이너 기능**: "파일 단위 삭제"가 **개인 저장소 항목은 사실상 항상 삭제 실패**하던
+  문제 발견 및 수정. 원인은 `delete_by_source()`가 팀 공유 전용 `qdrant_delete`(source 정확
+  필터 지원) 툴만 호출했는데, 개인 저장소의 `qdrant_delete_mine`은 source 필터를 지원하지 않고
+  정확한 point_id 목록만 받기 때문에 항상 0개 삭제로 조용히 실패했음("개인 저장소에 등록"이
+  기본값이라 실질적으로 거의 항상 해당).
+  - `delete_mine_by_source()` 추가: 파일명으로 의미 기반 검색을 돌려 source가 정확히 일치하는
+    항목들의 point_id를 모아 `qdrant_delete_mine`으로 삭제 (게이트웨이에 source 필터가 없어
+    검색 기반 최선 삭제 - 청크가 아주 많은 파일은 일부가 남을 수 있음, 확인창에 안내 문구 추가)
+  - `delete_from_all()` 추가: 팀 공유 + 개인 저장소 양쪽에서 삭제. "파일 단위 삭제" GUI가
+    `delete_by_source()` 대신 이걸 사용하도록 변경
+- **버그 수정**: "텍스트 붙여넣기로 등록" 후 "진행 상태/오류" 로그가 영구히 멈추던 문제 수정
+  (`register_pasted_text()`가 진행률 콜백을 감싸지 않아 GUI 큐에 dict 대신 정수가 들어가
+  `poll_queue()`가 예외로 죽으면서 재예약이 끊기던 것). `register_targets`와 동일한 방식으로
+  `_unit_progress` 래퍼 추가. 겸사겸사 `poll_queue()` 전체를 try/finally로 감싸서 앞으로
+  비슷한 예외가 나도 로그 폴링 자체는 항상 계속되도록 방어 코드 추가.
+
+## 2.8.1
+
+- **버그 수정**: "텍스트 붙여넣기로 등록"을 쓰면 그 이후로 "진행 상태/오류" 로그가 영구히 멈추는
+  문제 수정 (앱을 재시작하기 전까지 어떤 작업을 해도 로그가 안 뜸).
+  - 근본 원인: `register_pasted_text()`가 파일 등록(`register_targets`)과 달리 진행률
+    콜백을 감싸지 않고 그대로 넘겨서, `_report()`가 `progress_callback(unit_index, unit_total,
+    unit_label)`처럼 3개 인자로 직접 호출함. 이 콜백이 GUI의 `progress_queue.put`이다 보니
+    `Queue.put(item, block, timeout)`로 해석되어 dict 대신 정수(unit_index)가 큐에 들어갔고,
+    이걸 꺼내 쓰는 `update_progress_display()`가 `TypeError`로 죽으면서 `poll_queue()`의
+    100ms 재예약(`root.after`)이 끊겨버렸음. `register_targets`가 쓰는 것과 동일한 방식으로
+    `register_pasted_text()`에도 `_unit_progress` 래퍼를 추가해 올바른 dict 형태로 전달하도록 수정.
+  - 방어 코드: `poll_queue()` 전체를 try/finally로 감싸서, 앞으로 비슷한 예외가 나더라도
+    재예약(`root.after(100, self.poll_queue)`)만은 항상 일어나도록 해 로그가 영구히 멈추는
+    일 자체를 막음.
+
 ## 2.8.0
 
 - **마이너 기능**: "설정..." 창에 위키 로그인 계정/비밀번호(`wiki_username`/`wiki_password`) 편집

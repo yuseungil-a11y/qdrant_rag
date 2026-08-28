@@ -1170,6 +1170,23 @@ async def register_pasted_text(
         print("[안내] 저장할 대상이 선택되지 않았습니다 (개인/공용 모두 체크 해제됨).")
         return 0
 
+    # register_text_chunks_raw -> _store_in_batches -> _report는 progress_callback을
+    # (unit_index, unit_total, unit_label) 3개 인자로 직접 호출한다 (register_targets가
+    # 파일 등록에 쓰는 _unit_progress와 동일한 저수준 규약). GUI의 progress_callback은
+    # {"file_index", "file_total", ...} 형태의 dict 하나를 기대하므로, register_targets와
+    # 동일하게 여기서도 감싸서 규약을 맞춘다 - 안 감싸면 GUI 쪽 큐에 dict 대신 정수가 들어가
+    # 진행률 표시가 깨지고, 그 여파로 로그 폴링 자체가 멈추는 문제가 있었다.
+    def _unit_progress(unit_index, unit_total, unit_label):
+        if progress_callback is None:
+            return
+        try:
+            progress_callback({
+                "file_index": 1, "file_total": 1, "file_name": title,
+                "unit_index": unit_index, "unit_total": unit_total, "unit_label": unit_label,
+            })
+        except Exception:
+            pass
+
     async with AsyncExitStack() as stack:
         sessions = []
         for tool, url in store_targets:
@@ -1178,7 +1195,7 @@ async def register_pasted_text(
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             sessions.append((session, tool))
-        records = await register_text_chunks_raw(sessions, source, title, text, progress_callback)
+        records = await register_text_chunks_raw(sessions, source, title, text, _unit_progress)
 
     write_extraction_dump_raw(_sanitize_filename(title), source, records, [])
     print(f"등록 완료({store_targets_label(store_targets)}): {title} (텍스트 {len(records)}청크)")
@@ -1249,14 +1266,16 @@ def _keyword_filter(query: str, entries: list[dict]) -> list[dict]:
     return filtered
 
 
-async def search_qdrant(query: str) -> list[dict]:
-    """qdrant-find로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
-    삭제할 항목을 키워드로 찾아 고를 때 사용 (검색 자체는 아무것도 지우지 않음)."""
+async def _raw_find(tool_name: str, query: str) -> list[dict]:
+    """qdrant-find/qdrant_find_mine을 호출해서 [{"content": str, "metadata": dict}, ...]로
+    파싱만 하고 반환 (키워드 필터링 없음 - search_qdrant/search_my_qdrant는 여기에
+    _keyword_filter를 추가로 적용하고, delete_mine_by_source()처럼 정확한 source로 다시
+    걸러 쓰는 경우는 이 원본 그대로를 쓴다)."""
     async with streamablehttp_client(MCP_URL) as mcp_streams:
         read, write = mcp_streams[0], mcp_streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool("qdrant-find", {"query": query})
+            result = await session.call_tool(tool_name, {"query": query})
 
     if getattr(result, "isError", False):
         message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
@@ -1291,6 +1310,13 @@ async def search_qdrant(query: str) -> list[dict]:
         except Exception:
             metadata = {}
         parsed.append({"content": content_text, "metadata": metadata})
+    return parsed
+
+
+async def search_qdrant(query: str) -> list[dict]:
+    """qdrant-find로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
+    삭제할 항목을 키워드로 찾아 고를 때 사용 (검색 자체는 아무것도 지우지 않음)."""
+    parsed = await _raw_find("qdrant-find", query)
     return _keyword_filter(query, parsed)
 
 
@@ -1324,49 +1350,71 @@ async def delete_by_metadata(metadata: dict) -> int:
 async def search_my_qdrant(query: str) -> list[dict]:
     """qdrant_find_mine으로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
     config.json의 mcp_url에 담긴 key 본인의 개인 저장소만 검색된다(다른 사람 데이터는
-    애초에 안 보임). search_qdrant()의 개인 저장소 버전 — entry 형식이 같아서 같은
-    정규식(_FIND_ENTRY_RE)으로 파싱한다. metadata에는 게이트웨이가 실어 보낸 point id가
-    "_id" 키로 들어있어, delete_mine_by_metadata()가 그 항목만 정확히 지울 때 쓴다."""
+    애초에 안 보임). metadata에는 게이트웨이가 실어 보낸 point id가 "_id" 키로 들어있어,
+    delete_mine_by_metadata()가 그 항목만 정확히 지울 때 쓴다."""
+    parsed = await _raw_find("qdrant_find_mine", query)
+    return _keyword_filter(query, parsed)
+
+
+async def delete_mine_by_source(source: str) -> int:
+    """개인 저장소는 게이트웨이의 qdrant_delete_mine이 source 필터를 지원하지 않고 정확한
+    point_id 목록만 받는다 (team 저장소의 qdrant_delete와 다름). 그래서 "파일 하나 통째로
+    삭제"를 흉내내려면: 파일명으로 의미 기반 검색을 한 번 돌려서 그 결과 중 source가 정확히
+    일치하는 것들의 point_id를 모아 지우는 수밖에 없다.
+
+    **주의**: 이건 어디까지나 최선 노력(best-effort)이다. 의미 기반 검색은 관련도 상위 결과만
+    반환하므로, 청크가 아주 많은 파일이면 일부가 검색 결과에 안 걸려서 못 지워질 수 있다.
+    "삭제 완료"가 떠도 완전히 다 지워졌다는 보장은 아니라서, 호출부(GUI)는 반드시 이 사실을
+    사용자에게 알려야 한다."""
+    source = normalize_source(source)
+    query = Path(source).stem if not source.startswith("(") else source
+    candidates = await _raw_find("qdrant_find_mine", query)
+    point_ids = [
+        entry["metadata"]["_id"] for entry in candidates
+        if normalize_source(str(entry.get("metadata", {}).get("source", ""))) == source
+        and entry.get("metadata", {}).get("_id")
+    ]
+    if not point_ids:
+        print(f"개인 저장소: 삭제할 항목을 찾지 못했습니다: {source!r}")
+        return 0
+
     async with streamablehttp_client(MCP_URL) as mcp_streams:
         read, write = mcp_streams[0], mcp_streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool("qdrant_find_mine", {"query": query})
+            result = await session.call_tool("qdrant_delete_mine", {"point_ids": point_ids})
 
     if getattr(result, "isError", False):
         message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
-        print(f"[검색 오류] {message}")
-        return []
+        print(f"[오류] {message}")
+        return 0
 
-    raw = None
+    deleted = None
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
-        raw = structured.get("result")
-    if raw is None:
+        deleted = structured.get("deleted")
+    if deleted is None:
         for block in result.content:
             if hasattr(block, "text"):
                 try:
-                    raw = json.loads(block.text)
+                    deleted = json.loads(block.text).get("deleted")
                     break
                 except Exception:
                     pass
-    if not raw:
-        return []
+    deleted = deleted or 0
+    print(
+        f"개인 저장소: {deleted}개 항목 삭제 (검색 기반 최선 삭제라 일부가 검색에 안 걸려 "
+        f"남아있을 수 있음 - 확실히 하려면 키워드 검색으로 다시 확인하세요): {source!r}"
+    )
+    return deleted
 
-    parsed = []
-    for item in raw:
-        if not isinstance(item, str):
-            continue
-        m = _FIND_ENTRY_RE.match(item.strip())
-        if not m:
-            continue  # "결과가 없습니다" 같은 안내 문구는 entry 형식이 아니라서 자동으로 걸러짐
-        content_text, meta_json = m.groups()
-        try:
-            metadata = json.loads(meta_json)
-        except Exception:
-            metadata = {}
-        parsed.append({"content": content_text, "metadata": metadata})
-    return _keyword_filter(query, parsed)
+
+async def delete_from_all(source: str) -> int:
+    """팀 공유(qdrant_delete, source 정확 필터) + 개인 저장소(qdrant_delete_mine, 검색 기반
+    최선 삭제) 양쪽에서 이 source에 해당하는 항목을 전부 지운다. "파일 단위 삭제" GUI가 쓴다."""
+    deleted_shared = await delete_by_source(source)
+    deleted_mine = await delete_mine_by_source(source)
+    return deleted_shared + deleted_mine
 
 
 async def delete_mine_by_metadata(metadata: dict) -> int:
