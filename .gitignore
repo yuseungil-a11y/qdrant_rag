@@ -12,3 +12,6 @@ extracted_text/
 site_to_mediawikiupload.py
 # 개인 작업용 뉴스 스크랩 목록(실제 제목/링크) - incoming/과 같은 이유로 제외
 sites.txt
+
+# macOS Finder 메타데이터
+.DS_Store
