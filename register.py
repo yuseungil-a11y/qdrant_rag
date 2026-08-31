@@ -165,6 +165,38 @@ def save_mcp_urls(mcp_url: str, mcp_url_shared: str) -> None:
     MCP_URL_SHARED = mcp_url_shared
 
 
+def check_key_status(mcp_url: str, timeout: float = 5.0) -> dict:
+    """명시적 사용자 요청("클라이언트가 인증되지 않은 키로 접속할 때 응답 API 만들고 ...
+    프로그램/GUI 시작 시 한 번" 확인) — 실제 MCP 초기화 핸드셰이크(ClientSession.initialize())를
+    수행하지 않고, 게이트웨이에 가벼운 HTTP GET 요청 하나만 보내 키가 유효한지 미리 확인한다.
+
+    새 서버 엔드포인트는 추가하지 않았다 — qdrant_mcp_scure.py의 KeyAuthMiddleware는 메서드에
+    상관없이 모든 요청을 먼저 인증하므로, 키가 잘못됐으면 이 GET만으로도 이미 서버가 반환하고
+    있던 401 JSON({"error": "Unauthorized", "reason": ...})이 그대로 온다 - 이 함수는 그 기존
+    응답을 파싱하기만 한다(명시적 사용자 요청: "기존 401 응답을 클라이언트가 파싱"). 키가
+    유효하면 요청이 그대로 마운트된 MCP 앱까지 통과하는데, 실제 세션 없이 보내는 GET이라
+    401이 아닌 다른 상태코드(400/404/406 등)가 돌아올 수 있음 - 그래도 "401이 아니면 인증은
+    통과한 것"이라는 판단 기준에는 문제 없다.
+
+    반환: {"ok": bool, "reason": str|None}
+    - ok=True: 키가 유효함 (reason은 None)
+    - ok=False: 키가 없거나(REPLACE_ME 기본값) / 서버가 401을 반환했거나(reason에 서버가 준
+      사유) / 네트워크 자체가 안 됐음(reason에 예외 메시지)"""
+    if not mcp_url or "REPLACE_ME" in mcp_url:
+        return {"ok": False, "reason": "URL이 설정되지 않았습니다 (설정에서 mcp_url을 입력하세요)"}
+    try:
+        resp = requests.get(mcp_url, timeout=timeout)
+    except Exception as e:
+        return {"ok": False, "reason": f"서버에 연결할 수 없습니다: {e}"}
+    if resp.status_code == 401:
+        try:
+            reason = resp.json().get("reason") or "인증 실패"
+        except Exception:
+            reason = "인증 실패"
+        return {"ok": False, "reason": reason}
+    return {"ok": True, "reason": None}
+
+
 CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
 MCP_URL_SHARED = CONFIG.get("mcp_url_shared", "")

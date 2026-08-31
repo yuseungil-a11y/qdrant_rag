@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.9.1"
+APP_VERSION = "2.10.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -116,6 +116,19 @@ class App:
         version_bar.pack(side="top", fill="x", padx=10, pady=(4, 0))
         tk.Label(version_bar, text=f"v{APP_VERSION}", fg="#888888", font=(KOREAN_FONT, 8)).pack(side="right")
         tk.Button(version_bar, text="설정...", command=self.open_settings_dialog).pack(side="right", padx=(0, 8))
+
+        # 명시적 사용자 요청("인증되지 않은 키로 접속할 때 ... 프로그램/GUI 시작 시 한 번",
+        # "개인키, 공용키 구분해서 메시지 알려줘") - 개인/공용 저장소 키를 각각 별도로 표시.
+        # 초기 텍스트는 "확인 중..."이고, _check_key_status_on_startup()이 백그라운드
+        # 스레드에서 register.check_key_status()를 호출해 실제 결과로 갱신한다.
+        self.personal_key_status_label = tk.Label(
+            version_bar, text="개인키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
+        )
+        self.personal_key_status_label.pack(side="left")
+        self.shared_key_status_label = tk.Label(
+            version_bar, text="공용키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
+        )
+        self.shared_key_status_label.pack(side="left", padx=(12, 0))
 
         # 등록/삭제 관련 섹션이 계속 늘어나도 진행 상태 로그가 항상 보이도록,
         # 아래쪽(진행률+로그)은 창에 고정하고 위쪽 콘텐츠만 스크롤되게 분리한다.
@@ -402,6 +415,7 @@ class App:
         self._status_base = ""
         self._spinner_idx = 0
         self.root.after(100, self.poll_queue)
+        threading.Thread(target=self._check_key_status_on_startup, daemon=True).start()
 
     # 상태 표시줄을 정적 텍스트 대신 회전 스피너 + 색상으로 표시해, 처리 중인지 대기 중인지
     # 한눈에 구분되도록 한다. self.busy가 True인 동안 150ms마다 스스로 다시 예약해서 도는
@@ -421,6 +435,42 @@ class App:
         self._spinner_idx += 1
         self.status_label.config(text=f"{frame} {self._status_base}", fg="#1a73e8")
         self.root.after(150, self._animate_status)
+
+    def _check_key_status_on_startup(self):
+        """프로그램 시작 시 한 번, 실제 등록/검색을 시도하기 전에 개인/공용 키가 유효한지
+        미리 확인해서 상단에 표시한다(명시적 사용자 요청: "인증되지 않은 키로 접속할 때
+        응답 API", "프로그램/GUI 시작 시 한 번", "개인키, 공용키 구분해서 메시지 알려줘").
+        네트워크 요청(register.check_key_status)이 블로킹이라 백그라운드 스레드에서 돈다 -
+        UI 갱신은 self.root.after(0, ...)로 메인 스레드에 넘기고, 로그는 self.log()가
+        이미 스레드-세이프한 큐라 바로 써도 된다."""
+        self._check_one_key_status(
+            "개인", register.MCP_URL, self.personal_key_status_label,
+        )
+        # 공용 저장소는 필수가 아니라 비워둘 수 있음(register.py DEFAULT_CONFIG 참고) -
+        # 비어 있으면 확인 자체를 건너뛰고 "미설정"으로만 표시, 에러로 취급하지 않는다.
+        if register.MCP_URL_SHARED:
+            self._check_one_key_status(
+                "공용", register.MCP_URL_SHARED, self.shared_key_status_label,
+            )
+        else:
+            self.root.after(
+                0,
+                lambda: self.shared_key_status_label.config(text="공용키: 미설정", fg="#888888"),
+            )
+
+    def _check_one_key_status(self, label: str, mcp_url: str, status_widget: tk.Label):
+        result = register.check_key_status(mcp_url)
+        if result["ok"]:
+            self.log(f"[안내] {label} 저장소 키 인증 확인됨")
+            self.root.after(
+                0, lambda: status_widget.config(text=f"{label}키: ✓ 정상", fg="#2e7d32"),
+            )
+        else:
+            reason = result["reason"]
+            self.log(f"[경고] {label} 저장소 키 인증 실패: {reason}")
+            self.root.after(
+                0, lambda: status_widget.config(text=f"{label}키: ✗ {reason}", fg="#c0392b"),
+            )
 
     def open_settings_dialog(self):
         """개인/공용 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를 config.json 파일을
