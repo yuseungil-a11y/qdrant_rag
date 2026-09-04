@@ -65,6 +65,9 @@ SERVER_TEMPLATES: dict[str, dict] = {
         "label": "PMS (Redmine)",
         "kind": "npx",
         "command": "npx",
+        # 주의(2026-09-05, 사용자와 논의 후 보류): @latest라 서드파티 개발자가 이 npm 패키지를
+        # 내리거나 문제 있는 업데이트를 올리면 그대로 영향받는다. 필요해지면 버전 고정 또는
+        # mediawiki-mcp-server처럼 mcp_servers/에 미러링(vendoring)하는 방식으로 전환 고려.
         "args": ["-y", "@chspower1/mcp-for-redmine@latest"],
         "fixed_env": {},
         # (env 키, 표시 라벨, 비밀값 여부, 기본값) - 기본값은 사내에서 공통으로 쓰는 고정 주소라
@@ -129,6 +132,17 @@ def load_claude_config() -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
         raise RuntimeError(f"claude_desktop_config.json 읽기 실패: {e}")
+
+
+def resolve_exe_path(server_key: str) -> str | None:
+    """이미 claude_desktop_config.json에 저장된 실행 파일 경로가 있으면 그걸 쓰고, 없으면
+    흔한 기본 경로에서 자동탐지한다. 둘 다 없으면 None(= 이 서버를 아직 설정해본 적 없음)."""
+    template = SERVER_TEMPLATES[server_key]
+    if template["kind"] != "exe":
+        return None
+    existing = get_existing_server_config(server_key)
+    existing_exe = existing.get("command") or ""
+    return existing_exe or find_server_exe(template.get("exe_candidates", []))
 
 
 def get_existing_server_config(server_key: str) -> dict:

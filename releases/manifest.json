@@ -1,0 +1,7 @@
+{
+  "version": "2.16.0",
+  "windows": {
+    "path": "releases/windows/utinfo_vdr-2.16.0.exe",
+    "sha256": "8af67b4227da6bc164d7109218e19594916b22c4faa04e66ef65dd9a9a7bc686"
+  }
+}

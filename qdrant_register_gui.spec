@@ -65,7 +65,7 @@ if sys.platform == 'darwin':
         a.scripts,
         [],
         exclude_binaries=True,
-        name='qdrant_register_gui',
+        name='utinfo_vdr',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -85,11 +85,11 @@ if sys.platform == 'darwin':
         strip=False,
         upx=True,
         upx_exclude=[],
-        name='qdrant_register_gui',
+        name='utinfo_vdr',
     )
     app = BUNDLE(
         coll,
-        name='qdrant_register_gui.app',
+        name='utinfo_vdr.app',
         icon=None,
         bundle_identifier='co.kr.utinfo.qdrant-register-gui',
     )
@@ -100,7 +100,7 @@ else:
         a.binaries,
         a.datas,
         [],
-        name='qdrant_register_gui',
+        name='utinfo_vdr',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,

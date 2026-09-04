@@ -35,9 +35,10 @@ except ImportError:
 
 import mcp_config_helper
 import register
+import self_update
 import wiki_upload
 
-APP_VERSION = "2.15.0"
+APP_VERSION = "2.16.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -134,6 +135,20 @@ class App:
             version_bar, text="제안서키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
         )
         self.proposal_key_status_label.pack(side="left", padx=(12, 0))
+
+        # 명시적 사용자 요청: "업데이트 확인 버튼을 메인UI에 표기하고 실행할때 자동으로
+        # 버전체크해서 버전이 다르면 애니메이션으로 표기해줘" - qdrant_register_gui.exe
+        # 자기 자신의 버전 대상(명시적으로 재확인함: "qdrant_register_gui.exe를 원한거야").
+        # Windows exe로 실행 중일 때만 의미 있음(self_update.py 참고) - 소스 실행/다른 OS는
+        # 조용히 아무것도 표시하지 않는다. 클릭하면 업데이트 확인 결과에 따라 설치를 시작한다.
+        self.app_update_label = tk.Label(
+            version_bar, text="", font=(KOREAN_FONT, 8), cursor="hand2",
+        )
+        self.app_update_label.pack(side="left", padx=(12, 0))
+        self.app_update_label.bind("<Button-1>", lambda e: self._on_click_app_update_label())
+        self._app_update_blinking = False
+        self._app_update_blink_idx = 0
+        self._app_update_manifest_entry = None
 
         # 등록/삭제 관련 섹션이 계속 늘어나도 진행 상태 로그가 항상 보이도록,
         # 아래쪽(진행률+로그)은 창에 고정하고 위쪽 콘텐츠만 스크롤되게 분리한다.
@@ -433,6 +448,7 @@ class App:
         self._spinner_idx = 0
         self.root.after(100, self.poll_queue)
         threading.Thread(target=self._check_key_status_on_startup, daemon=True).start()
+        threading.Thread(target=self._check_app_update_on_startup, daemon=True).start()
 
     # 상태 표시줄을 정적 텍스트 대신 회전 스피너 + 색상으로 표시해, 처리 중인지 대기 중인지
     # 한눈에 구분되도록 한다. self.busy가 True인 동안 150ms마다 스스로 다시 예약해서 도는
@@ -498,7 +514,75 @@ class App:
                 0, lambda: status_widget.config(text=f"{label}키: ✗ {reason}", fg="#c0392b"),
             )
 
-    def open_settings_dialog(self):
+    def _check_app_update_on_startup(self):
+        """프로그램 시작 시 한 번, qdrant_register_gui.exe 자신의 새 버전이 있는지 확인한다
+        (명시적 사용자 요청: "업데이트 확인 버튼을 메인UI에 표기하고 실행할때 자동으로
+        버전체크해서 버전이 다르면 애니메이션으로 표기해줘" - qdrant_register_gui.exe 대상
+        임을 명시적으로 재확인함). Windows exe로 실행 중이 아니면(소스 실행/다른 OS)
+        self_update.check_for_app_update()가 ok=False를 주므로 조용히 아무것도 표시 안 함."""
+        result = self_update.check_for_app_update(APP_VERSION)
+        self.root.after(0, lambda: self._show_app_update_indicator(result))
+
+    def _show_app_update_indicator(self, result: dict):
+        self._app_update_manifest_entry = result.get("manifest_entry")
+        if not result["ok"]:
+            return  # 대상이 아니거나(다른 OS/소스 실행) 확인 실패 - 메인 화면은 조용히 넘어감
+        if result["update_available"]:
+            self.app_update_label.config(text=f"⬆ 새 버전 있음 (v{result['latest_version']}, 클릭해서 업데이트)")
+            self._start_app_update_blink(True)
+            self.log(f"[안내] 새 버전이 있습니다: v{result['latest_version']}")
+        else:
+            self._start_app_update_blink(False)
+            self.app_update_label.config(text="", fg="#888888")
+
+    _APP_UPDATE_BLINK_COLORS = ["#e67e22", "#ffb74d"]
+
+    def _start_app_update_blink(self, enable: bool):
+        was_blinking = self._app_update_blinking
+        self._app_update_blinking = enable
+        if enable and not was_blinking:
+            self._animate_app_update_blink()
+
+    def _animate_app_update_blink(self):
+        if not self._app_update_blinking:
+            return
+        self._app_update_blink_idx = (self._app_update_blink_idx + 1) % len(self._APP_UPDATE_BLINK_COLORS)
+        self.app_update_label.config(fg=self._APP_UPDATE_BLINK_COLORS[self._app_update_blink_idx])
+        self.root.after(500, self._animate_app_update_blink)
+
+    def _on_click_app_update_label(self):
+        if not self._app_update_manifest_entry:
+            return
+        if self.busy:
+            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
+            return
+        if not messagebox.askyesno(
+            "업데이트 설치",
+            "새 버전을 내려받아 설치합니다. 설치가 끝나면 프로그램이 자동으로 재시작됩니다.\n"
+            "계속하시겠습니까?",
+        ):
+            return
+        self._start_app_update_blink(False)
+        self.app_update_label.config(text="다운로드 중...", fg="#888888")
+        threading.Thread(target=self._run_app_update_install, daemon=True).start()
+
+    def _run_app_update_install(self):
+        try:
+            self_update.download_and_apply_app_update(self._app_update_manifest_entry)
+        except Exception as e:
+            self.root.after(0, lambda: self._show_app_update_install_result(False, str(e)))
+            return
+        # 배치 스크립트가 파일 교체+재실행을 맡고, 이 프로세스는 스스로 종료해야 파일 잠금이
+        # 풀려서 배치 스크립트가 진행될 수 있다.
+        self.root.after(0, self.root.destroy)
+
+    def _show_app_update_install_result(self, success: bool, error: str):
+        if success:
+            return
+        self.app_update_label.config(text="⬆ 업데이트 설치 실패 (클릭해서 재시도)", fg="#c0392b")
+        self.log(f"[오류] 자동 업데이트 설치 실패: {error}")
+
+    def open_settings_dialog(self, initial_tab: int | None = None):
         """개인/공용/제안서 자료 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를
         config.json 파일을 직접 열지 않고 GUI에서 등록/편집(명시적 사용자 요청:
         "윈도우 등록 프로그램에 저장소 편집 기능도 추가해")."""
@@ -612,6 +696,9 @@ class App:
             self._build_mcp_server_section(mcp_tab, server_key)
 
         tk.Button(win, text="닫기", command=win.destroy).pack(anchor="e", padx=10, pady=(0, 10))
+
+        if initial_tab is not None:
+            notebook.select(initial_tab)
 
     @staticmethod
     def _mcp_status_text(is_saved: bool, has_value: bool, kind: str) -> tuple[str, str]:
