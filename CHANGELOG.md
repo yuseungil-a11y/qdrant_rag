@@ -5,6 +5,82 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.15.0
+
+- **마이너 기능**: MediaWiki MCP 서버 실행 파일의 자동 업데이트 확인/설치 기능 추가(명시적
+  사용자 요청: "실행파일을 윈도우/맥북 구분해서 MCP 서버에 등록하면 버전체크해서 자동으로
+  업데이트 가능해?"). 이 실행 파일은 별도 빌드된 Node.js 바이너리라 자체 버전 정보가 없어,
+  qdrant_rag git 저장소 자체를 "최신 버전"의 기준으로 삼기로 함(사용자 확인: "예, qdrant_rag
+  저장소에 그대로 커밋").
+  - 저장소에 `mcp_servers/` 폴더 신설 - Windows/macOS용 `mediawiki-mcp-server` 실행 파일과
+    각각의 sha256 해시를 담은 `manifest.json` 커밋.
+  - `mcp_config_helper.check_for_server_update()`: GitHub raw URL로 `manifest.json`만
+    가볍게 받아서 로컬 실행 파일의 sha256과 비교 - 실제 실행 파일(수십MB)은 다를 때만 받음.
+  - `mcp_config_helper.download_server_update()`: 임시 파일로 받아 해시 재검증 후
+    `os.replace()`로 원자적 교체. Claude 데스크톱 앱이 그 파일을 실행 중이라 교체가 막히면
+    "Claude 데스크톱 앱을 먼저 종료하라"는 메시지로 안내.
+  - "MCP 연동" 탭의 MediaWiki 섹션에 "업데이트 확인"/"업데이트 설치" 버튼과 상태 문구 추가.
+    groupware처럼 "최신 버전"의 출처가 없는 서버는 이 버튼이 아예 뜨지 않음
+    (`SERVER_TEMPLATES`에 `manifest_key`가 있는 서버만 해당).
+
+## 2.14.2
+
+- **버그 수정**: "MCP 연동" 탭에서 라벨+입력칸+버튼+상태 문구를 한 줄에 다 넣다 보니 창
+  너비를 넘어서 상태 문구("... 저장 필요")가 오른쪽으로 잘려 보이던 문제 수정. 상태 문구를
+  같은 줄이 아니라 입력칸 아래 별도 줄로 옮기고, 설정 창 크기도 680x540으로 넓힘.
+
+## 2.14.1
+
+- **마이너 기능**: "MCP 연동" 탭의 각 입력칸(실행 파일 경로 포함) 옆에 그 값이 실제로
+  `claude_desktop_config.json`에 저장된 값인지, 아니면 자동탐지/기본값이라 아직 저장 전인지
+  구분해서 보여주는 작은 상태 라벨 추가(명시적 사용자 요청: "'자동탐지됨 - 저장 필요' /
+  '저장됨' 표시 추가해") - 이미 저장된 값이면 "✓ 저장됨"(녹색), 자동탐지된 실행 파일
+  경로거나 사내 공통 기본 URL이면 "자동탐지됨 - 저장 필요"/"기본값 - 저장 필요"(주황색)로
+  표시. "저장" 버튼을 누르면 해당 서버의 모든 라벨이 즉시 "✓ 저장됨"으로 갱신됨.
+
+## 2.14.0
+
+- **마이너 기능**: "MCP 연동 설정"이 메인 화면의 별도 섹션이 아니라 상단 **"설정..." 버튼**
+  화면 안으로 통합됨(명시적 사용자 요청: "MCP 연동, 그룹웨어, 미디어위키 설정 부분은 상단
+  설정 버튼 화면에 반영해"). 설정 창을 `ttk.Notebook` 탭 3개(Qdrant 저장소 / 위키(문서등록) /
+  MCP 연동)로 재구성 - 각 탭은 독립적으로 "저장" 가능. MCP 연동 탭은 내용이 길어질 수 있어
+  자체 스크롤 캔버스로 감쌈.
+- **마이너 기능**: PMS(Redmine)/MediaWiki MCP 서버 URL에 사내 공통 기본값을 미리 채워둠
+  (명시적 사용자 요청 - PMS: `http://pms.utinfo.co.kr:1177/redmine`, MediaWiki:
+  `https://pms.utinfo.co.kr/mediawiki/api.php`). 이미 설정된 값이 있으면 그 값이 우선하고,
+  API 키/비밀번호처럼 사람마다 다른 값은 기본값 없이 비워둠.
+
+## 2.13.1
+
+- **버그 수정 겸 마이너 개선**: "MCP 연동 설정"의 MediaWiki 실행 파일 자동탐지가 Windows(`.exe`)만
+  가정하고 있어, macOS용 배포본(`dist/mac_mediawiki-mcp-server/mediawiki-mcp-server`, 확장자
+  없음)이 dist 폴더에 함께 놓여 있어도 실행 중인 OS와 무관하게 항상 Windows 경로만 찾던 문제
+  수정. `sys.platform`에 따라 후보 경로 목록을 분리(Windows: `mediawiki-mcp-server-windows.exe`,
+  macOS: `mac_mediawiki-mcp-server/mediawiki-mcp-server`)해서 실행 중인 OS에 맞는 파일만
+  자동 인식하도록 함. "찾아보기" 파일 선택창의 `*.exe` 필터도 Windows에서만 적용(macOS 실행
+  파일은 보통 확장자가 없어 필터가 무의미했음).
+
+## 2.13.0
+
+- **마이너 기능**: 비개발자가 Claude 데스크톱 앱의 `claude_desktop_config.json`을 직접 열어
+  편집하지 않아도 되도록, GUI에 **"MCP 연동 설정"** 섹션을 새로 추가(명시적 사용자 요청:
+  "config MCP를 연동하려면 비 개발자가 설정하기 너무 어려워 ... 설정값만 입력해서 사용하고
+  싶어"). 새 모듈 `mcp_config_helper.py`가 서버별 URL/계정/비밀번호/키 값만 받아서 올바른
+  `command`/`args`/`env` 구조로 병합 저장 - 다른 서버 설정이나 `coworkUserFilesPath`/
+  `preferences` 같은 다른 최상위 키는 절대 건드리지 않음.
+  - 1차 지원 범위(사내 자체 서버 3종): PMS(Redmine, `npx` 실행형), 그룹웨어/MediaWiki
+    (exe 실행형). github 등 다른 서버는 이 섹션에서 다루지 않음.
+  - exe 실행형(그룹웨어/MediaWiki)은 실행 파일 자체를 이 프로그램이 만들거나 내장하지
+    않고, 흔한 기본 경로(이 프로그램과 같은 폴더 우선, 그다음 `C:\` 루트)에 있으면
+    자동 인식하거나 "찾아보기" 버튼으로 직접 지정(register.py의 Tesseract/LibreOffice
+    자동탐지와 동일한 패턴).
+  - `npx` 실행형(PMS)은 Node.js/npx가 PATH에 있는지 확인해서 안내만 표시.
+  - 저장 시 이미 설정돼 있던 값은 입력칸에 미리 채워져서 수정도 가능. 저장 후 "Claude
+    데스크톱 앱을 재시작해야 적용됨"을 로그에 안내.
+  - 배포용 dist 폴더에 `mediawiki-mcp-server-windows.exe`를 `qdrant_register_gui.exe`와
+    같은 폴더에 함께 넣어두면, 이 프로그램을 통째로 복사하는 것만으로 MediaWiki MCP
+    서버 실행 파일까지 자동 인식됨.
+
 ## 2.12.0
 
 - **마이너 기능(서버 정책 변경 대응)**: 게이트웨이(qdrant_mcp v2.0.0)가 개인/공용/제안서

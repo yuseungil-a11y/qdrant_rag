@@ -33,10 +33,11 @@ try:
 except ImportError:
     DND_AVAILABLE = False
 
+import mcp_config_helper
 import register
 import wiki_upload
 
-APP_VERSION = "2.12.0"
+APP_VERSION = "2.15.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -409,6 +410,10 @@ class App:
         self.site_category_entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
         tk.Button(site_category_row, text="URL 위키에 업로드", command=self.start_site_upload).pack(side="left")
 
+        # MCP 연동(PMS/그룹웨어/MediaWiki) 설정은 별도 섹션이 아니라 상단 "설정..." 버튼
+        # 화면(탭)에 통합되어 있음 - open_settings_dialog() 참고.
+        self.mcp_cfg_widgets: dict[str, dict] = {}
+
         if DND_AVAILABLE:
             self.drop_label.drop_target_register(DND_FILES)
             self.drop_label.dnd_bind("<<Drop>>", self.on_drop)
@@ -499,43 +504,67 @@ class App:
         "윈도우 등록 프로그램에 저장소 편집 기능도 추가해")."""
         win = tk.Toplevel(self.root)
         win.title("설정")
-        win.geometry("560x420")
+        win.geometry("680x540")
+        win.minsize(560, 400)
         win.transient(self.root)
 
+        notebook = ttk.Notebook(win)
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # --- 탭 1: Qdrant 저장소 URL ---
+        qdrant_tab = tk.Frame(notebook)
+        notebook.add(qdrant_tab, text="Qdrant 저장소")
+
         tk.Label(
-            win, text="개인 저장소 URL (mcp_url):", anchor="w", font=(KOREAN_FONT, 10),
+            qdrant_tab, text="개인 저장소 URL (mcp_url):", anchor="w", font=(KOREAN_FONT, 10),
         ).pack(fill="x", padx=10, pady=(12, 0))
-        personal_entry = tk.Entry(win)
+        personal_entry = tk.Entry(qdrant_tab)
         personal_entry.insert(0, register.CONFIG.get("mcp_url", ""))
         personal_entry.pack(fill="x", padx=10, pady=(2, 10))
 
         tk.Label(
-            win, text="공용 저장소 URL (mcp_url_shared):", anchor="w", font=(KOREAN_FONT, 10),
+            qdrant_tab, text="공용 저장소 URL (mcp_url_shared):", anchor="w", font=(KOREAN_FONT, 10),
         ).pack(fill="x", padx=10, pady=(0, 0))
-        shared_entry = tk.Entry(win)
+        shared_entry = tk.Entry(qdrant_tab)
         shared_entry.insert(0, register.CONFIG.get("mcp_url_shared", ""))
         shared_entry.pack(fill="x", padx=10, pady=(2, 10))
 
         tk.Label(
-            win, text="제안서 자료 저장소 URL (mcp_url_proposal):", anchor="w", font=(KOREAN_FONT, 10),
+            qdrant_tab, text="제안서 자료 저장소 URL (mcp_url_proposal):", anchor="w", font=(KOREAN_FONT, 10),
         ).pack(fill="x", padx=10, pady=(0, 0))
-        proposal_entry = tk.Entry(win)
+        proposal_entry = tk.Entry(qdrant_tab)
         proposal_entry.insert(0, register.CONFIG.get("mcp_url_proposal", ""))
         proposal_entry.pack(fill="x", padx=10, pady=(2, 10))
+
+        def save_qdrant_urls():
+            personal = personal_entry.get().strip()
+            shared = shared_entry.get().strip()
+            proposal = proposal_entry.get().strip()
+            if not personal:
+                messagebox.showwarning("입력 필요", "개인 저장소 URL은 비워둘 수 없습니다.", parent=win)
+                return
+            register.save_mcp_urls(personal, shared, proposal)
+            self.log("[안내] Qdrant 저장소 설정을 저장했습니다 (config.json)")
+
+        tk.Button(qdrant_tab, text="저장", command=save_qdrant_urls).pack(anchor="e", padx=10, pady=(4, 10))
+
+        # --- 탭 2: 위키 문서 등록 로그인 (wiki_upload.py가 mwclient로 직접 로그인할 때 씀) ---
+        wiki_tab = tk.Frame(notebook)
+        notebook.add(wiki_tab, text="위키(문서등록)")
 
         wiki_cfg = wiki_upload.get_wiki_config()
 
         tk.Label(
-            win, text="위키 로그인 계정 (wiki_username):", anchor="w", font=(KOREAN_FONT, 10),
-        ).pack(fill="x", padx=10, pady=(0, 0))
-        wiki_user_entry = tk.Entry(win)
+            wiki_tab, text="위키 로그인 계정 (wiki_username):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(12, 0))
+        wiki_user_entry = tk.Entry(wiki_tab)
         wiki_user_entry.insert(0, wiki_cfg.get("wiki_username", ""))
         wiki_user_entry.pack(fill="x", padx=10, pady=(2, 10))
 
         tk.Label(
-            win, text="위키 로그인 비밀번호 (wiki_password):", anchor="w", font=(KOREAN_FONT, 10),
+            wiki_tab, text="위키 로그인 비밀번호 (wiki_password):", anchor="w", font=(KOREAN_FONT, 10),
         ).pack(fill="x", padx=10, pady=(0, 0))
-        wiki_pw_row = tk.Frame(win)
+        wiki_pw_row = tk.Frame(wiki_tab)
         wiki_pw_row.pack(fill="x", padx=10, pady=(2, 10))
         wiki_pw_entry = tk.Entry(wiki_pw_row, show="*")
         wiki_pw_entry.insert(0, wiki_cfg.get("wiki_password", ""))
@@ -546,22 +575,273 @@ class App:
             command=lambda: wiki_pw_entry.config(show="" if wiki_pw_show_var.get() else "*"),
         ).pack(side="left", padx=(6, 0))
 
-        def save():
-            personal = personal_entry.get().strip()
-            shared = shared_entry.get().strip()
-            proposal = proposal_entry.get().strip()
-            if not personal:
-                messagebox.showwarning("입력 필요", "개인 저장소 URL은 비워둘 수 없습니다.", parent=win)
-                return
-            register.save_mcp_urls(personal, shared, proposal)
+        def save_wiki_login():
             wiki_upload.save_wiki_credentials(wiki_user_entry.get().strip(), wiki_pw_entry.get())
-            self.log("[안내] MCP 서버/위키 로그인 설정을 저장했습니다 (config.json)")
-            win.destroy()
+            self.log("[안내] 위키 로그인 설정을 저장했습니다 (config.json)")
 
-        btn_row = tk.Frame(win)
-        btn_row.pack(fill="x", padx=10, pady=(4, 10))
-        tk.Button(btn_row, text="저장", command=save).pack(side="right")
-        tk.Button(btn_row, text="취소", command=win.destroy).pack(side="right", padx=(0, 6))
+        tk.Button(wiki_tab, text="저장", command=save_wiki_login).pack(anchor="e", padx=10, pady=(4, 10))
+
+        # --- 탭 3: MCP 연동 (Claude 데스크톱 앱의 claude_desktop_config.json) ---
+        # 명시적 사용자 요청: "config MCP를 연동하려면 비 개발자가 설정하기 너무 어려워
+        # 각각의 모듈로 만들어서 바로 설정값만 입력해서 사용하고 싶어" - raw JSON을 직접
+        # 편집하지 않고 서버별 값(URL/계정/키)만 입력하면 mcp_config_helper.py가 올바른
+        # command/args/env 구조로 claude_desktop_config.json에 병합해준다.
+        mcp_tab_outer = tk.Frame(notebook)
+        notebook.add(mcp_tab_outer, text="MCP 연동")
+
+        tk.Label(
+            mcp_tab_outer,
+            text="사내 MCP 서버 접속 정보를 입력하면 claude_desktop_config.json에 자동으로 반영합니다"
+                 " (저장 후 Claude 데스크톱 앱을 재시작해야 적용됨)",
+            fg="#666666", anchor="w", wraplength=560, justify="left",
+        ).pack(fill="x", padx=10, pady=(10, 5))
+
+        # 탭 안 내용이 창보다 길어질 수 있어 자체 스크롤 캔버스로 감싼다.
+        mcp_canvas = tk.Canvas(mcp_tab_outer, highlightthickness=0)
+        mcp_scrollbar = tk.Scrollbar(mcp_tab_outer, orient="vertical", command=mcp_canvas.yview)
+        mcp_canvas.configure(yscrollcommand=mcp_scrollbar.set)
+        mcp_scrollbar.pack(side="right", fill="y")
+        mcp_canvas.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        mcp_tab = tk.Frame(mcp_canvas)
+        mcp_canvas_window = mcp_canvas.create_window((0, 0), window=mcp_tab, anchor="nw")
+        mcp_tab.bind("<Configure>", lambda e: mcp_canvas.configure(scrollregion=mcp_canvas.bbox("all")))
+        mcp_canvas.bind("<Configure>", lambda e: mcp_canvas.itemconfig(mcp_canvas_window, width=e.width))
+
+        self.mcp_cfg_widgets = {}
+        for server_key in mcp_config_helper.SERVER_TEMPLATES:
+            self._build_mcp_server_section(mcp_tab, server_key)
+
+        tk.Button(win, text="닫기", command=win.destroy).pack(anchor="e", padx=10, pady=(0, 10))
+
+    @staticmethod
+    def _mcp_status_text(is_saved: bool, has_value: bool, kind: str) -> tuple[str, str]:
+        """입력칸에 보이는 값이 실제로 claude_desktop_config.json에 저장된 값인지, 아니면
+        자동탐지/기본값이라 아직 저장 전인지 구분해서 보여줄 (문구, 색상)을 만든다.
+        명시적 사용자 요청: "(예: '자동탐지됨 - 저장 필요' / '저장됨')를 추가해"."""
+        if is_saved:
+            return "✓ 저장됨", "#2e7d32"
+        if has_value:
+            label = "자동탐지됨 - 저장 필요" if kind == "exe" else "기본값 - 저장 필요"
+            return label, "#e67e22"
+        return "", "#888888"
+
+    def _build_mcp_server_section(self, parent, server_key: str):
+        """server_key(mcp_config_helper.SERVER_TEMPLATES의 키) 하나에 대한 입력 폼을 만든다.
+        exe로 실행하는 서버(mediawiki/groupware)는 실행 파일 경로 입력칸도 함께 넣고, 흔한
+        기본 경로에 있으면 자동으로 채워준다(register.py의 Tesseract/LibreOffice 자동탐지와
+        동일한 패턴) - 실행 파일 자체는 이 프로그램이 만들지 않고 이미 설치돼 있다고 가정한다.
+        각 입력칸 아래에는 그 값이 이미 저장된 값인지, 자동탐지/기본값이라 아직 저장 전인지
+        보여주는 작은 상태 라벨을 붙인다."""
+        template = mcp_config_helper.SERVER_TEMPLATES[server_key]
+        existing = mcp_config_helper.get_existing_server_config(server_key)
+        existing_env = existing.get("env", {})
+
+        box = tk.LabelFrame(parent, text=template["label"])
+        box.pack(fill="x", padx=5, pady=(0, 8))
+
+        widgets = {"fields": {}, "field_status": {}}
+
+        if template["kind"] == "exe":
+            exe_row = tk.Frame(box)
+            exe_row.pack(fill="x", padx=5, pady=(5, 0))
+            tk.Label(exe_row, text="실행 파일:", width=14, anchor="w").pack(side="left")
+            exe_entry = tk.Entry(exe_row)
+            existing_exe = existing.get("command") or ""
+            default_exe = existing_exe or mcp_config_helper.find_server_exe(template["exe_candidates"])
+            if default_exe:
+                exe_entry.insert(0, default_exe)
+            exe_entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
+            tk.Button(
+                exe_row, text="찾아보기...",
+                command=lambda e=exe_entry: self._browse_mcp_exe(e),
+            ).pack(side="left")
+            # 라벨+입력칸+버튼만으로도 한 줄이 창 너비를 넘기기 쉬워, 상태 문구는 같은 줄이
+            # 아니라 그 아래 별도 줄에 둔다(같은 줄에 넣었더니 창 오른쪽으로 잘려 보이던 문제).
+            exe_status = tk.Label(box, anchor="w", font=(KOREAN_FONT, 8))
+            exe_status.pack(fill="x", padx=(19 + 5, 5), pady=(0, 4))
+            text, color = self._mcp_status_text(bool(existing_exe), bool(default_exe), "exe")
+            exe_status.config(text=text, fg=color)
+            widgets["exe_entry"] = exe_entry
+            widgets["exe_status"] = exe_status
+
+            # 실행 파일 자체(예: mediawiki-mcp-server)의 최신 버전을 qdrant_rag 저장소
+            # manifest.json과 비교해서 업데이트할 수 있는 서버만 이 UI를 보여준다 - groupware처럼
+            # "최신 버전"의 출처가 없는 서버는 manifest_key가 없어 자동으로 숨겨짐.
+            if template.get("manifest_key"):
+                update_row = tk.Frame(box)
+                update_row.pack(fill="x", padx=5, pady=(0, 4))
+                update_check_btn = tk.Button(
+                    update_row, text="업데이트 확인",
+                    command=lambda k=server_key: self._check_mcp_server_update(k),
+                )
+                update_check_btn.pack(side="left")
+                update_install_btn = tk.Button(
+                    update_row, text="업데이트 설치",
+                    command=lambda k=server_key: self._install_mcp_server_update(k),
+                    state="disabled",
+                )
+                update_install_btn.pack(side="left", padx=(6, 0))
+                update_status = tk.Label(update_row, anchor="w", font=(KOREAN_FONT, 8))
+                update_status.pack(side="left", padx=(6, 0))
+                widgets["update_check_btn"] = update_check_btn
+                widgets["update_install_btn"] = update_install_btn
+                widgets["update_status"] = update_status
+                widgets["update_manifest_entry"] = None
+        else:
+            npx_path = mcp_config_helper.find_npx()
+            note = "Node.js/npx 확인됨" if npx_path else "Node.js/npx를 찾을 수 없음 - 설치 필요 (https://nodejs.org)"
+            tk.Label(box, text=note, fg="#2e7d32" if npx_path else "#c0392b", anchor="w").pack(
+                fill="x", padx=5, pady=(5, 2)
+            )
+
+        for env_key, disp_label, is_secret, default_value in template["fields"]:
+            row = tk.Frame(box)
+            row.pack(fill="x", padx=5, pady=(2, 0))
+            tk.Label(row, text=f"{disp_label}:", width=14, anchor="w").pack(side="left")
+            entry = tk.Entry(row, show="*" if is_secret else "")
+            existing_value = existing_env.get(env_key) or ""
+            # 이미 설정된 값이 있으면 그걸 우선하고, 없으면 사내 공통 기본 주소로 미리 채운다
+            # (API 키처럼 사람마다 다른 값은 default_value가 빈 문자열이라 그냥 비워둠).
+            entry.insert(0, existing_value or default_value)
+            entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
+            if is_secret:
+                show_var = tk.BooleanVar(value=False)
+                tk.Checkbutton(
+                    row, text="표시", variable=show_var,
+                    command=lambda e=entry, v=show_var: e.config(show="" if v.get() else "*"),
+                ).pack(side="left")
+            widgets["fields"][env_key] = entry
+
+            # 상태 문구도 exe와 동일하게 입력칸 줄이 아니라 그 아래 별도 줄에 둬서 창 너비를
+            # 넘기지 않게 한다.
+            status_label = tk.Label(box, anchor="w", font=(KOREAN_FONT, 8))
+            status_label.pack(fill="x", padx=(19 + 5, 5), pady=(0, 2))
+            text, color = self._mcp_status_text(bool(existing_value), bool(existing_value or default_value), "field")
+            status_label.config(text=text, fg=color)
+            widgets["field_status"][env_key] = status_label
+
+        tk.Button(
+            box, text="저장", command=lambda k=server_key: self._save_mcp_server(k),
+        ).pack(anchor="e", padx=5, pady=(2, 5))
+
+        self.mcp_cfg_widgets[server_key] = widgets
+
+    def _browse_mcp_exe(self, entry: tk.Entry):
+        # macOS 실행 파일은 보통 확장자가 없어 "*.exe" 필터가 의미 없으므로, Windows에서만
+        # exe 필터를 앞세우고 macOS/Linux에서는 모든 파일을 기본으로 보여준다.
+        if sys.platform == "win32":
+            filetypes = [("실행 파일", "*.exe"), ("모든 파일", "*.*")]
+        else:
+            filetypes = [("모든 파일", "*.*")]
+        file = filedialog.askopenfilename(title="MCP 서버 실행 파일 선택", filetypes=filetypes)
+        if file:
+            entry.delete(0, "end")
+            entry.insert(0, file)
+
+    def _save_mcp_server(self, server_key: str):
+        template = mcp_config_helper.SERVER_TEMPLATES[server_key]
+        widgets = self.mcp_cfg_widgets[server_key]
+
+        field_values = {}
+        for env_key, disp_label, _, _ in template["fields"]:
+            value = widgets["fields"][env_key].get().strip()
+            if not value:
+                messagebox.showwarning("입력 필요", f"{disp_label} 값을 입력하세요.", parent=self.root)
+                return
+            field_values[env_key] = value
+
+        exe_path = None
+        if template["kind"] == "exe":
+            exe_path = widgets["exe_entry"].get().strip()
+            if not exe_path:
+                messagebox.showwarning("입력 필요", "실행 파일 경로를 입력하거나 선택하세요.", parent=self.root)
+                return
+            if not Path(exe_path).exists():
+                if not messagebox.askyesno(
+                    "파일을 찾을 수 없음",
+                    f"지정한 경로에 실행 파일이 없습니다:\n{exe_path}\n\n그래도 이 경로로 저장하시겠습니까?",
+                    parent=self.root,
+                ):
+                    return
+
+        try:
+            saved_path = mcp_config_helper.save_server_config(server_key, field_values, exe_path=exe_path)
+        except Exception as e:
+            self.log(f"[오류] {template['label']} MCP 설정 저장 실패: {e}")
+            return
+
+        # 방금 저장한 값들은 이제 "자동탐지/기본값"이 아니라 "저장된 값"이므로 상태 라벨을 갱신
+        for env_key in widgets["field_status"]:
+            widgets["field_status"][env_key].config(text="✓ 저장됨", fg="#2e7d32")
+        if "exe_status" in widgets:
+            widgets["exe_status"].config(text="✓ 저장됨", fg="#2e7d32")
+
+        self.log(
+            f"[안내] {template['label']} MCP 설정을 저장했습니다 ({saved_path}). "
+            "Claude 데스크톱 앱을 재시작해야 적용됩니다."
+        )
+
+    def _check_mcp_server_update(self, server_key: str):
+        widgets = self.mcp_cfg_widgets[server_key]
+        exe_path = widgets["exe_entry"].get().strip()
+        widgets["update_check_btn"].config(state="disabled")
+        widgets["update_status"].config(text="확인 중...", fg="#888888")
+        threading.Thread(target=self._run_check_update, args=(server_key, exe_path), daemon=True).start()
+
+    def _run_check_update(self, server_key: str, exe_path: str):
+        result = mcp_config_helper.check_for_server_update(server_key, exe_path)
+        self.root.after(0, lambda: self._show_update_check_result(server_key, result))
+
+    def _show_update_check_result(self, server_key: str, result: dict):
+        widgets = self.mcp_cfg_widgets[server_key]
+        widgets["update_check_btn"].config(state="normal")
+        widgets["update_manifest_entry"] = result.get("manifest_entry")
+        if not result["ok"]:
+            widgets["update_status"].config(text=result["message"], fg="#c0392b")
+            widgets["update_install_btn"].config(state="disabled")
+            return
+        if result["update_available"]:
+            widgets["update_status"].config(text=result["message"], fg="#e67e22")
+            widgets["update_install_btn"].config(state="normal")
+        else:
+            widgets["update_status"].config(text=result["message"], fg="#2e7d32")
+            widgets["update_install_btn"].config(state="disabled")
+
+    def _install_mcp_server_update(self, server_key: str):
+        widgets = self.mcp_cfg_widgets[server_key]
+        manifest_entry = widgets.get("update_manifest_entry")
+        if not manifest_entry:
+            return
+        exe_path = widgets["exe_entry"].get().strip()
+        if not exe_path:
+            messagebox.showwarning("입력 필요", "실행 파일 경로를 먼저 입력하거나 선택하세요.", parent=self.root)
+            return
+        widgets["update_install_btn"].config(state="disabled")
+        widgets["update_check_btn"].config(state="disabled")
+        widgets["update_status"].config(text="다운로드 중...", fg="#888888")
+        threading.Thread(
+            target=self._run_install_update, args=(server_key, manifest_entry, exe_path), daemon=True
+        ).start()
+
+    def _run_install_update(self, server_key: str, manifest_entry: dict, exe_path: str):
+        try:
+            mcp_config_helper.download_server_update(manifest_entry, exe_path)
+        except Exception as e:
+            self.root.after(0, lambda: self._show_update_install_result(server_key, False, str(e)))
+            return
+        self.root.after(0, lambda: self._show_update_install_result(server_key, True, ""))
+
+    def _show_update_install_result(self, server_key: str, success: bool, error: str):
+        widgets = self.mcp_cfg_widgets[server_key]
+        widgets["update_check_btn"].config(state="normal")
+        if success:
+            widgets["update_install_btn"].config(state="disabled")
+            widgets["update_status"].config(text="✓ 설치 완료 - Claude 재시작 필요", fg="#2e7d32")
+            self.log(f"[안내] {mcp_config_helper.SERVER_TEMPLATES[server_key]['label']} 실행 파일을 최신 버전으로 교체했습니다.")
+        else:
+            widgets["update_install_btn"].config(state="normal")
+            widgets["update_status"].config(text="설치 실패", fg="#c0392b")
+            self.log(f"[오류] {mcp_config_helper.SERVER_TEMPLATES[server_key]['label']} 업데이트 설치 실패: {error}")
 
     def log(self, msg: str):
         self.msg_queue.put(msg)

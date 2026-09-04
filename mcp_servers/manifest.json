@@ -1,0 +1,13 @@
+{
+  "mediawiki": {
+    "asset_version": 1,
+    "windows": {
+      "path": "mcp_servers/mediawiki/windows/mediawiki-mcp-server-windows.exe",
+      "sha256": "4df36775fec19052e08323f92341a81c05b066525c24c38578c96bdd9be9aaea"
+    },
+    "mac": {
+      "path": "mcp_servers/mediawiki/mac/mediawiki-mcp-server",
+      "sha256": "976c0ac32ee40cbba74f9b70e818e4cb5c474a5ef67d40a8e8b4074d1e4b1204"
+    }
+  }
+}
