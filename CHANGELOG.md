@@ -5,6 +5,21 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.12.0
+
+- **마이너 기능(서버 정책 변경 대응)**: 게이트웨이(qdrant_mcp v2.0.0)가 개인/공용/제안서
+  저장소를 완전히 배타적으로 분리하면서, 개인 키(`MCP_URL`)로 공용/제안서 저장소의
+  삭제·검색을 호출하던 기존 코드가 전부 "접근 권한이 없습니다" 에러로 실패하게 됨 - 이를
+  저장소별 올바른 키로 라우팅하도록 수정.
+  - `_call_delete_tool()`/`_raw_find()`가 이제 호출부에서 `mcp_url`을 명시적으로 받도록
+    변경(예전엔 항상 `MCP_URL` 하드코딩).
+  - `delete_by_source()`/`search_qdrant()`(공용) → `MCP_URL_SHARED`,
+    `delete_proposal_by_source()`(제안서) → `MCP_URL_PROPOSAL`,
+    `delete_mine_by_source()`/`search_my_qdrant()`(개인) → `MCP_URL`(변경 없음).
+  - 해당 URL이 config.json에 설정 안 돼 있으면(예: `mcp_url_proposal` 비어있음) 에러
+    대신 안내 메시지만 출력하고 건너뜀(기존 `resolve_store_targets()`와 동일한 패턴).
+  - 실제 서버로 저장→검색→삭제 전체 흐름을 저장소별 전용 키로 검증 완료.
+
 ## 2.11.0
 
 - **마이너 기능**: 세 번째 저장 대상 "제안서 자료 저장소"(게이트웨이의 두 번째 공용

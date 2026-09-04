@@ -1260,10 +1260,13 @@ async def register_pasted_text(
     return len(records)
 
 
-async def _call_delete_tool(tool_name: str, args: dict) -> int:
-    """게이트웨이의 삭제 툴(qdrant_delete 또는 qdrant_delete_mine)을 호출해 실제로 삭제된
-    개수를 반환하는 공통 저수준 헬퍼. 두 툴 다 {"deleted": N} 반환 형태가 동일하다."""
-    async with streamablehttp_client(MCP_URL) as mcp_streams:
+async def _call_delete_tool(tool_name: str, args: dict, mcp_url: str) -> int:
+    """게이트웨이의 삭제 툴(qdrant_delete/qdrant_delete_mine/qdrant_delete_proposal)을 호출해
+    실제로 삭제된 개수를 반환하는 공통 저수준 헬퍼. 세 툴 다 {"deleted": N} 반환 형태가 동일하다.
+    mcp_url은 호출부가 명시해야 한다 - 개인/공용/제안서 저장소가 서로 다른 키로 완전히
+    분리(2026-09-04 정책: "개인은 개인만, 공용은 공용만, 제안서는 제안서만 접근")되어 있어서,
+    예전처럼 항상 MCP_URL(개인 키)로 걸면 공용/제안서 삭제는 이제 권한 오류로 실패한다."""
+    async with streamablehttp_client(mcp_url) as mcp_streams:
         read, write = mcp_streams[0], mcp_streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -1293,8 +1296,12 @@ async def _call_delete_tool(tool_name: str, args: dict) -> int:
 
 
 async def _call_qdrant_delete(args: dict) -> int:
-    """게이트웨이의 qdrant_delete(팀 공유) 툴을 호출하는 저수준 헬퍼."""
-    return await _call_delete_tool("qdrant_delete", args)
+    """게이트웨이의 qdrant_delete(팀 공유) 툴을 호출하는 저수준 헬퍼. 공용 저장소 전용 키
+    (MCP_URL_SHARED)로 호출 - 개인 키는 이제 공용 저장소에 접근 권한이 없다."""
+    if not MCP_URL_SHARED:
+        print("[안내] config.json에 mcp_url_shared가 설정되지 않아 공용 저장소 작업을 건너뜁니다.")
+        return 0
+    return await _call_delete_tool("qdrant_delete", args, MCP_URL_SHARED)
 
 
 async def delete_by_source(source: str) -> int:
@@ -1330,12 +1337,13 @@ def _keyword_filter(query: str, entries: list[dict]) -> list[dict]:
     return filtered
 
 
-async def _raw_find(tool_name: str, query: str) -> list[dict]:
+async def _raw_find(tool_name: str, query: str, mcp_url: str) -> list[dict]:
     """qdrant-find/qdrant_find_mine을 호출해서 [{"content": str, "metadata": dict}, ...]로
     파싱만 하고 반환 (키워드 필터링 없음 - search_qdrant/search_my_qdrant는 여기에
     _keyword_filter를 추가로 적용하고, delete_mine_by_source()처럼 정확한 source로 다시
-    걸러 쓰는 경우는 이 원본 그대로를 쓴다)."""
-    async with streamablehttp_client(MCP_URL) as mcp_streams:
+    걸러 쓰는 경우는 이 원본 그대로를 쓴다). mcp_url은 _call_delete_tool과 동일한 이유로
+    호출부가 명시(공용 검색은 MCP_URL_SHARED, 개인 검색은 MCP_URL)."""
+    async with streamablehttp_client(mcp_url) as mcp_streams:
         read, write = mcp_streams[0], mcp_streams[1]
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -1379,8 +1387,12 @@ async def _raw_find(tool_name: str, query: str) -> list[dict]:
 
 async def search_qdrant(query: str) -> list[dict]:
     """qdrant-find로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
-    삭제할 항목을 키워드로 찾아 고를 때 사용 (검색 자체는 아무것도 지우지 않음)."""
-    parsed = await _raw_find("qdrant-find", query)
+    삭제할 항목을 키워드로 찾아 고를 때 사용 (검색 자체는 아무것도 지우지 않음).
+    공용 저장소 전용 키(MCP_URL_SHARED)로 호출 - 개인 키는 공용 저장소 접근 권한이 없다."""
+    if not MCP_URL_SHARED:
+        print("[안내] config.json에 mcp_url_shared가 설정되지 않아 공용 저장소 검색을 건너뜁니다.")
+        return []
+    parsed = await _raw_find("qdrant-find", query, MCP_URL_SHARED)
     return _keyword_filter(query, parsed)
 
 
@@ -1416,7 +1428,7 @@ async def search_my_qdrant(query: str) -> list[dict]:
     config.json의 mcp_url에 담긴 key 본인의 개인 저장소만 검색된다(다른 사람 데이터는
     애초에 안 보임). metadata에는 게이트웨이가 실어 보낸 point id가 "_id" 키로 들어있어,
     delete_mine_by_metadata()가 그 항목만 정확히 지울 때 쓴다."""
-    parsed = await _raw_find("qdrant_find_mine", query)
+    parsed = await _raw_find("qdrant_find_mine", query, MCP_URL)
     return _keyword_filter(query, parsed)
 
 
@@ -1428,7 +1440,7 @@ async def delete_mine_by_source(source: str) -> int:
     많은 파일은 일부가 안 지워질 위험이 있었다), qdrant_delete와 완전히 동일하게 신뢰할 수
     있다 - 검색을 거치지 않고 바로 정확히 매칭되는 만큼만 지운다."""
     source = normalize_source(source)
-    deleted = await _call_delete_tool("qdrant_delete_mine", {"source": source})
+    deleted = await _call_delete_tool("qdrant_delete_mine", {"source": source}, MCP_URL)
     if deleted == 0:
         print(f"개인 저장소: 삭제할 항목이 없습니다: {source!r}")
     else:
@@ -1439,11 +1451,13 @@ async def delete_mine_by_source(source: str) -> int:
 async def delete_proposal_by_source(source: str) -> int:
     """제안서 자료 공용 저장소(proposal_data)에서 source에 해당하는 항목을 전부 삭제한다.
     delete_mine_by_source()와 동일하게 qdrant_delete_proposal의 source 서버 사이드 정확
-    필터를 그대로 호출 - MCP_URL(개인 키)로 호출하며, scope=personal 키는 게이트웨이의
-    _require_collection_access()가 named 공용 저장소 전반에 별도 허용목록 없이 접근을
-    허용하므로 추가 설정 없이 동작한다."""
+    필터를 그대로 호출 - 제안서 전용 키(MCP_URL_PROPOSAL)로 호출한다(2026-09-04 정책 변경:
+    개인 키는 더 이상 named 공용 저장소에 자동으로 접근할 수 없음)."""
+    if not MCP_URL_PROPOSAL:
+        print("[안내] config.json에 mcp_url_proposal이 설정되지 않아 제안서 자료 저장소 작업을 건너뜁니다.")
+        return 0
     source = normalize_source(source)
-    deleted = await _call_delete_tool("qdrant_delete_proposal", {"source": source})
+    deleted = await _call_delete_tool("qdrant_delete_proposal", {"source": source}, MCP_URL_PROPOSAL)
     if deleted == 0:
         print(f"제안서 자료 저장소: 삭제할 항목이 없습니다: {source!r}")
     else:
