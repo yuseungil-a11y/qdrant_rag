@@ -36,7 +36,7 @@ except ImportError:
 import register
 import wiki_upload
 
-APP_VERSION = "2.10.0"
+APP_VERSION = "2.11.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -129,6 +129,10 @@ class App:
             version_bar, text="공용키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
         )
         self.shared_key_status_label.pack(side="left", padx=(12, 0))
+        self.proposal_key_status_label = tk.Label(
+            version_bar, text="제안서키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
+        )
+        self.proposal_key_status_label.pack(side="left", padx=(12, 0))
 
         # 등록/삭제 관련 섹션이 계속 늘어나도 진행 상태 로그가 항상 보이도록,
         # 아래쪽(진행률+로그)은 창에 고정하고 위쪽 콘텐츠만 스크롤되게 분리한다.
@@ -199,6 +203,14 @@ class App:
         tk.Checkbutton(
             target_frame, text="공용 저장소에 등록",
             variable=self.shared_store_var, font=(KOREAN_FONT, 10, "bold"),
+        ).pack(side="left", padx=(15, 0))
+        # 명시적 사용자 요청("벡터 공용 저장소를 한개 더 만들고 싶어, 저장소 이름은
+        # proposal_data") - 팀 공용 저장소(utinfo_docs)와는 별도인 두 번째 공용 저장소.
+        # 마찬가지로 팀 전체가 보게 되므로 기본값은 항상 꺼짐.
+        self.proposal_store_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            target_frame, text="제안서 자료 저장소에 등록",
+            variable=self.proposal_store_var, font=(KOREAN_FONT, 10, "bold"),
         ).pack(side="left", padx=(15, 0))
 
         tk.Label(
@@ -446,8 +458,8 @@ class App:
         self._check_one_key_status(
             "개인", register.MCP_URL, self.personal_key_status_label,
         )
-        # 공용 저장소는 필수가 아니라 비워둘 수 있음(register.py DEFAULT_CONFIG 참고) -
-        # 비어 있으면 확인 자체를 건너뛰고 "미설정"으로만 표시, 에러로 취급하지 않는다.
+        # 공용/제안서 자료 저장소는 필수가 아니라 비워둘 수 있음(register.py DEFAULT_CONFIG
+        # 참고) - 비어 있으면 확인 자체를 건너뛰고 "미설정"으로만 표시, 에러로 취급하지 않는다.
         if register.MCP_URL_SHARED:
             self._check_one_key_status(
                 "공용", register.MCP_URL_SHARED, self.shared_key_status_label,
@@ -456,6 +468,15 @@ class App:
             self.root.after(
                 0,
                 lambda: self.shared_key_status_label.config(text="공용키: 미설정", fg="#888888"),
+            )
+        if register.MCP_URL_PROPOSAL:
+            self._check_one_key_status(
+                "제안서", register.MCP_URL_PROPOSAL, self.proposal_key_status_label,
+            )
+        else:
+            self.root.after(
+                0,
+                lambda: self.proposal_key_status_label.config(text="제안서키: 미설정", fg="#888888"),
             )
 
     def _check_one_key_status(self, label: str, mcp_url: str, status_widget: tk.Label):
@@ -473,11 +494,12 @@ class App:
             )
 
     def open_settings_dialog(self):
-        """개인/공용 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를 config.json 파일을
-        직접 열지 않고 GUI에서 등록/편집."""
+        """개인/공용/제안서 자료 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를
+        config.json 파일을 직접 열지 않고 GUI에서 등록/편집(명시적 사용자 요청:
+        "윈도우 등록 프로그램에 저장소 편집 기능도 추가해")."""
         win = tk.Toplevel(self.root)
         win.title("설정")
-        win.geometry("560x340")
+        win.geometry("560x420")
         win.transient(self.root)
 
         tk.Label(
@@ -493,6 +515,13 @@ class App:
         shared_entry = tk.Entry(win)
         shared_entry.insert(0, register.CONFIG.get("mcp_url_shared", ""))
         shared_entry.pack(fill="x", padx=10, pady=(2, 10))
+
+        tk.Label(
+            win, text="제안서 자료 저장소 URL (mcp_url_proposal):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(0, 0))
+        proposal_entry = tk.Entry(win)
+        proposal_entry.insert(0, register.CONFIG.get("mcp_url_proposal", ""))
+        proposal_entry.pack(fill="x", padx=10, pady=(2, 10))
 
         wiki_cfg = wiki_upload.get_wiki_config()
 
@@ -520,10 +549,11 @@ class App:
         def save():
             personal = personal_entry.get().strip()
             shared = shared_entry.get().strip()
+            proposal = proposal_entry.get().strip()
             if not personal:
                 messagebox.showwarning("입력 필요", "개인 저장소 URL은 비워둘 수 없습니다.", parent=win)
                 return
-            register.save_mcp_urls(personal, shared)
+            register.save_mcp_urls(personal, shared, proposal)
             wiki_upload.save_wiki_credentials(wiki_user_entry.get().strip(), wiki_pw_entry.get())
             self.log("[안내] MCP 서버/위키 로그인 설정을 저장했습니다 (config.json)")
             win.destroy()
@@ -593,8 +623,8 @@ class App:
         if folder:
             self.start_registration([Path(folder)])
 
-    def current_store_flags(self) -> tuple[bool, bool]:
-        return self.personal_store_var.get(), self.shared_store_var.get()
+    def current_store_flags(self) -> tuple[bool, bool, bool]:
+        return self.personal_store_var.get(), self.shared_store_var.get(), self.proposal_store_var.get()
 
     def start_registration(self, paths: list[Path]):
         if self.busy:
@@ -602,9 +632,9 @@ class App:
             return
         if not paths:
             return
-        personal, shared = self.current_store_flags()
-        if not personal and not shared:
-            self.log("[알림] 개인/공용 저장소 중 하나 이상을 체크하세요.")
+        personal, shared, proposal = self.current_store_flags()
+        if not personal and not shared and not proposal:
+            self.log("[알림] 저장소를 하나 이상 체크하세요.")
             return
         self.busy = True
         self.set_status("처리 중")
@@ -615,10 +645,12 @@ class App:
         # tkinter 변수는 메인 스레드에서 읽고, 백그라운드 스레드에는 순수 값만 넘긴다
         process_images = self.process_images_var.get()
         threading.Thread(
-            target=self.run_registration, args=(paths, process_images, personal, shared), daemon=True
+            target=self.run_registration, args=(paths, process_images, personal, shared, proposal), daemon=True
         ).start()
 
-    def run_registration(self, paths: list[Path], process_images: bool, personal: bool, shared: bool):
+    def run_registration(
+        self, paths: list[Path], process_images: bool, personal: bool, shared: bool, proposal: bool,
+    ):
         register.PROCESS_IMAGES = process_images
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
@@ -627,7 +659,10 @@ class App:
         try:
             self.log(f"이미지 처리: {'켜짐' if process_images else '꺼짐 (텍스트만 등록)'}")
             asyncio.run(
-                register.main(paths, progress_callback=self.progress_queue.put, personal=personal, shared=shared)
+                register.main(
+                    paths, progress_callback=self.progress_queue.put,
+                    personal=personal, shared=shared, proposal=proposal,
+                )
             )
         except Exception as e:
             self.log(f"[오류] {e}")
@@ -652,9 +687,9 @@ class App:
         if not text:
             self.log("[알림] 등록할 텍스트가 비어 있습니다.")
             return
-        personal, shared = self.current_store_flags()
-        if not personal and not shared:
-            self.log("[알림] 개인/공용 저장소 중 하나 이상을 체크하세요.")
+        personal, shared, proposal = self.current_store_flags()
+        if not personal and not shared and not proposal:
+            self.log("[알림] 저장소를 하나 이상 체크하세요.")
             return
         title = self.paste_title_entry.get().strip()
         if not title:
@@ -676,10 +711,12 @@ class App:
         self.file_progress_label.config(text="파일 -/-")
         self.unit_progress_label.config(text="")
         threading.Thread(
-            target=self.run_pasted_registration, args=(title, text, personal, shared), daemon=True
+            target=self.run_pasted_registration, args=(title, text, personal, shared, proposal), daemon=True
         ).start()
 
-    def run_pasted_registration(self, title: str, text: str, personal: bool, shared: bool):
+    def run_pasted_registration(
+        self, title: str, text: str, personal: bool, shared: bool, proposal: bool,
+    ):
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
@@ -687,7 +724,8 @@ class App:
         try:
             asyncio.run(
                 register.register_pasted_text(
-                    title, text, progress_callback=self.progress_queue.put, personal=personal, shared=shared
+                    title, text, progress_callback=self.progress_queue.put,
+                    personal=personal, shared=shared, proposal=proposal,
                 )
             )
             self.root.after(0, lambda: self.paste_text.delete("1.0", "end"))
@@ -718,8 +756,9 @@ class App:
             return
         if not messagebox.askyesno(
             "삭제 확인",
-            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 팀 공유 저장소와 개인 저장소 양쪽에서 "
-            "삭제합니다.\n이 작업은 되돌릴 수 없습니다.\n\n" + source,
+            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 팀 공유/개인/제안서 자료 저장소 "
+            "세 곳 모두에서 삭제합니다(등록 안 됐던 곳은 그냥 건너뜁니다).\n"
+            "이 작업은 되돌릴 수 없습니다.\n\n" + source,
         ):
             return
         self.busy = True

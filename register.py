@@ -121,6 +121,7 @@ DEFAULT_CONFIG = {
     # 실제 서버 주소/키는 이 소스에 넣지 말고 config.json에서만 관리 (config.json은 git 추적 제외)
     "mcp_url": "https://example.com/mcp?key=REPLACE_ME",  # 개인 저장소
     "mcp_url_shared": "https://example.com/mcp?key=REPLACE_ME",  # 공용(팀 공유) 저장소 - 개인과 별도 서버/키
+    "mcp_url_proposal": "",  # 제안서 자료 공용 저장소(proposal_data) - 비워두면 등록 시 건너뜀
     "ollama_url": "http://localhost:11434/api/generate",
     "vision_model": "moondream",  # GPU 있으면 llava, qwen2.5vl 등으로 교체 가능
     "translate_model": "gemma3:4b",  # 캡션(영어)을 한글로 번역할 때 쓰는 일반 텍스트 LLM
@@ -153,16 +154,18 @@ def load_config() -> dict:
     return {**DEFAULT_CONFIG, **data}
 
 
-def save_mcp_urls(mcp_url: str, mcp_url_shared: str) -> None:
-    """GUI의 설정 화면에서 개인/공용 MCP 서버 URL을 수정했을 때 호출한다.
-    config.json에 저장하고, 이미 로드되어 있는 MCP_URL/MCP_URL_SHARED 전역값도 즉시 갱신해
-    앱을 재시작하지 않아도 다음 등록/검색/삭제부터 바로 새 URL을 쓰게 한다."""
-    global MCP_URL, MCP_URL_SHARED
+def save_mcp_urls(mcp_url: str, mcp_url_shared: str, mcp_url_proposal: str = "") -> None:
+    """GUI의 설정 화면에서 개인/공용/제안서 자료 MCP 서버 URL을 수정했을 때 호출한다.
+    config.json에 저장하고, 이미 로드되어 있는 MCP_URL/MCP_URL_SHARED/MCP_URL_PROPOSAL
+    전역값도 즉시 갱신해 앱을 재시작하지 않아도 다음 등록/검색/삭제부터 바로 새 URL을 쓰게 한다."""
+    global MCP_URL, MCP_URL_SHARED, MCP_URL_PROPOSAL
     CONFIG["mcp_url"] = mcp_url
     CONFIG["mcp_url_shared"] = mcp_url_shared
+    CONFIG["mcp_url_proposal"] = mcp_url_proposal
     CONFIG_PATH.write_text(json.dumps(CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
     MCP_URL = mcp_url
     MCP_URL_SHARED = mcp_url_shared
+    MCP_URL_PROPOSAL = mcp_url_proposal
 
 
 def check_key_status(mcp_url: str, timeout: float = 5.0) -> dict:
@@ -200,6 +203,7 @@ def check_key_status(mcp_url: str, timeout: float = 5.0) -> dict:
 CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
 MCP_URL_SHARED = CONFIG.get("mcp_url_shared", "")
+MCP_URL_PROPOSAL = CONFIG.get("mcp_url_proposal", "")
 OLLAMA_URL = CONFIG["ollama_url"]
 VISION_MODEL = CONFIG["vision_model"]
 TRANSLATE_MODEL = CONFIG["translate_model"]
@@ -798,9 +802,20 @@ STORE_RETRY_DELAY = 2  # 재시도 사이 대기 시간(초)
 StoreTarget = tuple[str, str]
 
 
-def resolve_store_targets(personal: bool, shared: bool) -> list[StoreTarget]:
-    """체크박스 상태(개인/공용)에 따라 실제로 저장을 수행할 대상 목록을 만든다.
-    둘 다 켜져 있으면 둘 다 포함(파일당 두 곳에 저장), 둘 다 꺼져 있으면 빈 목록."""
+# 저장 대상 툴 이름 -> (표시 이름, 배치 저장 툴 이름). 새 공용 저장소가 하나 더 생기면
+# (명시적 사용자 요청: "벡터 공용 저장소를 한개 더 만들고 싶어, 저장소 이름은 proposal_data")
+# resolve_store_targets()에 체크박스 인자 하나, 이 dict에 항목 하나만 추가하면 된다 -
+# _target_label/store_targets_label/_store_in_batches 전부 이 dict 하나로 동작한다.
+_STORE_TOOL_INFO = {
+    "qdrant_store_mine": ("개인 저장소", "qdrant_store_mine_batch"),
+    "qdrant-store": ("공용 저장소", "qdrant_store_batch"),
+    "qdrant_store_proposal": ("제안서 자료 저장소", "qdrant_store_proposal_batch"),
+}
+
+
+def resolve_store_targets(personal: bool, shared: bool, proposal: bool = False) -> list[StoreTarget]:
+    """체크박스 상태(개인/공용/제안서 자료)에 따라 실제로 저장을 수행할 대상 목록을 만든다.
+    여러 개가 켜져 있으면 전부 포함(파일당 그만큼 여러 곳에 저장), 다 꺼져 있으면 빈 목록."""
     targets: list[StoreTarget] = []
     if personal:
         targets.append(("qdrant_store_mine", MCP_URL))
@@ -809,11 +824,16 @@ def resolve_store_targets(personal: bool, shared: bool) -> list[StoreTarget]:
             print("[안내] config.json에 mcp_url_shared가 설정되지 않아 공용 저장소 등록을 건너뜁니다.")
         else:
             targets.append(("qdrant-store", MCP_URL_SHARED))
+    if proposal:
+        if not MCP_URL_PROPOSAL:
+            print("[안내] config.json에 mcp_url_proposal이 설정되지 않아 제안서 자료 저장소 등록을 건너뜁니다.")
+        else:
+            targets.append(("qdrant_store_proposal", MCP_URL_PROPOSAL))
     return targets
 
 
 def _target_label(store_tool: str) -> str:
-    return "개인 저장소" if store_tool == "qdrant_store_mine" else "공용 저장소"
+    return _STORE_TOOL_INFO.get(store_tool, (store_tool,))[0]
 
 
 def store_targets_label(store_targets: list[StoreTarget]) -> str:
@@ -881,7 +901,7 @@ async def _store_in_batches(
     이후 조회 결과에도 남지 않는다 - 예전처럼 실패해도 성공한 것처럼 기록되지 않는다."""
     if not records:
         return []
-    batch_tool = "qdrant_store_mine_batch" if store_tool == "qdrant_store_mine" else "qdrant_store_batch"
+    batch_tool = _STORE_TOOL_INFO.get(store_tool, (None, "qdrant_store_batch"))[1]
     total = len(records)
     use_batch = True
     done = 0
@@ -1134,14 +1154,18 @@ async def register_targets(sessions: list[tuple[ClientSession, str]], targets: l
         _unit_progress(1, 1, "완료")  # 세부 진행률을 못 받는 포맷(.doc/.txt 등)도 파일 완료 시 확실히 갱신
 
 
-async def main(targets: Path | list[Path], progress_callback=None, personal: bool = True, shared: bool = False):
-    """personal/shared: 각각 개인/공용 저장소 등록 여부. 둘 다 True면 같은 내용을 두 곳 모두에 저장."""
+async def main(
+    targets: Path | list[Path], progress_callback=None,
+    personal: bool = True, shared: bool = False, proposal: bool = False,
+):
+    """personal/shared/proposal: 각각 개인/공용/제안서 자료 저장소 등록 여부. 여러 개가
+    True면 같은 내용을 그만큼 여러 곳에 저장."""
     if isinstance(targets, Path):
         targets = [targets]
 
-    store_targets = resolve_store_targets(personal, shared)
+    store_targets = resolve_store_targets(personal, shared, proposal)
     if not store_targets:
-        print("[안내] 저장할 대상이 선택되지 않았습니다 (개인/공용 모두 체크 해제됨).")
+        print("[안내] 저장할 대상이 선택되지 않았습니다 (모든 저장소 체크 해제됨).")
         return
     print(f"등록 대상: {store_targets_label(store_targets)}")
 
@@ -1190,16 +1214,18 @@ def _sanitize_filename(name: str) -> str:
 
 
 async def register_pasted_text(
-    title: str, text: str, progress_callback=None, personal: bool = True, shared: bool = False
+    title: str, text: str, progress_callback=None,
+    personal: bool = True, shared: bool = False, proposal: bool = False,
 ) -> int:
     """탐색기 파일이 아니라 GUI에 직접 붙여넣은 텍스트를 Qdrant에 등록. 등록된 청크 수 반환.
-    personal/shared: 각각 개인/공용 저장소 등록 여부. 둘 다 True면 같은 내용을 두 곳 모두에 저장."""
+    personal/shared/proposal: 각각 개인/공용/제안서 자료 저장소 등록 여부. 여러 개가 True면
+    같은 내용을 그만큼 여러 곳에 저장."""
     title = title.strip() or datetime.now().strftime("붙여넣은 텍스트 %Y-%m-%d %H:%M:%S")
     source = f"(직접 입력) {title}"
 
-    store_targets = resolve_store_targets(personal, shared)
+    store_targets = resolve_store_targets(personal, shared, proposal)
     if not store_targets:
-        print("[안내] 저장할 대상이 선택되지 않았습니다 (개인/공용 모두 체크 해제됨).")
+        print("[안내] 저장할 대상이 선택되지 않았습니다 (모든 저장소 체크 해제됨).")
         return 0
 
     # register_text_chunks_raw -> _store_in_batches -> _report는 progress_callback을
@@ -1410,12 +1436,31 @@ async def delete_mine_by_source(source: str) -> int:
     return deleted
 
 
+async def delete_proposal_by_source(source: str) -> int:
+    """제안서 자료 공용 저장소(proposal_data)에서 source에 해당하는 항목을 전부 삭제한다.
+    delete_mine_by_source()와 동일하게 qdrant_delete_proposal의 source 서버 사이드 정확
+    필터를 그대로 호출 - MCP_URL(개인 키)로 호출하며, scope=personal 키는 게이트웨이의
+    _require_collection_access()가 named 공용 저장소 전반에 별도 허용목록 없이 접근을
+    허용하므로 추가 설정 없이 동작한다."""
+    source = normalize_source(source)
+    deleted = await _call_delete_tool("qdrant_delete_proposal", {"source": source})
+    if deleted == 0:
+        print(f"제안서 자료 저장소: 삭제할 항목이 없습니다: {source!r}")
+    else:
+        print(f"제안서 자료 저장소: {deleted}개 항목 삭제: {source!r}")
+    return deleted
+
+
 async def delete_from_all(source: str) -> int:
-    """팀 공유(qdrant_delete)와 개인 저장소(qdrant_delete_mine) 양쪽 다 source 정확 필터로
-    이 source에 해당하는 항목을 전부 지운다. "파일 단위 삭제" GUI가 쓴다."""
+    """팀 공유(qdrant_delete), 개인 저장소(qdrant_delete_mine), 제안서 자료 저장소
+    (qdrant_delete_proposal) 세 곳 모두 source 정확 필터로 이 source에 해당하는 항목을
+    전부 지운다. "파일 단위 삭제" GUI가 쓴다. 등록 당시 체크박스와 무관하게 항상 세 곳 다
+    시도하며(등록 안 됐던 곳은 그냥 0건 삭제로 조용히 끝남), 그래서 "이 파일이 어디에
+    등록됐었는지" 따로 추적할 필요가 없다."""
     deleted_shared = await delete_by_source(source)
     deleted_mine = await delete_mine_by_source(source)
-    return deleted_shared + deleted_mine
+    deleted_proposal = await delete_proposal_by_source(source)
+    return deleted_shared + deleted_mine + deleted_proposal
 
 
 async def delete_mine_by_metadata(metadata: dict) -> int:
