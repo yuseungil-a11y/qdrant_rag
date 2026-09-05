@@ -5,6 +5,18 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.18.1
+
+- **버그 수정(심각)**: 배포된 exe가 파이썬이 아예 없는 PC(운영 대상 PC 전부가 여기 해당)에서
+  시작하자마자 `ImportError: Module 'pywintypes' isn't in frozen sys.path`로 죽던 문제
+  수정 - 2.17.1의 pydantic_core와 같은 종류의 원인(실사용 중 발견, PC는 AMD CPU였으나
+  원인은 CPU와 무관). pywin32는 컴파일된 DLL(`pywintypesNNN.dll`/`pythoncomNNN.dll`)을
+  `site-packages\pywin32_system32\`에 따로 두고 실행 시점에 직접 그 폴더를 찾는 특이한
+  구조라, 자동 의존성 분석/기존 훅만으로는 누락될 수 있음 - 개발 PC는 pywin32가 시스템에
+  설치돼 있어(pip install 시 DLL이 그렇게 등록됨) 이 누락이 가려져 정상 동작하는 것처럼
+  보였음. spec 파일에서 pywintypes.py가 찾는 것과 정확히 같은 폴더명(`pywin32_system32`)
+  으로 DLL을 직접 담아 훅 동작 여부와 무관하게 확실히 포함되도록 함.
+
 ## 2.18.0
 
 - **마이너 기능**: "파일 단위 삭제"와 "키워드로 검색해서 삭제"를 상단 개인/공용/전략기획실

@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import glob
+import os
 import sys
+import sysconfig
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
@@ -45,6 +48,27 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pydantic')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pydantic_core')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+# pywintypes/pythoncom(pywin32)도 pydantic_core와 같은 이유로 자동 분석에서 누락된다.
+# pywin32는 컴파일된 DLL(pywintypesNNN.dll/pythoncomNNN.dll)을 site-packages\pywin32_system32\
+# 에 따로 두고, pywintypes.py가 실행 시점에 그 폴더를 직접 찾아서 로드하는 특이한 구조라
+# 일반적인 import 분석/기존 pyinstaller-hooks-contrib 훅만으로는 이 DLL이 안 실린 채
+# 빌드되는 경우가 있다 - 개발 PC에서는 pywin32가 시스템에 설치돼 있어(pip install 시
+# System32 등에도 DLL이 등록됨) 이 누락이 가려져 정상 동작하는 것처럼 보였지만, 파이썬이
+# 아예 없는 배포 대상 PC(요구사항: "파이썬이 설치 안되는 유저들에게도 배포")에서는
+# "Module 'pywintypes' isn't in frozen sys.path"로 시작부터 죽는다(2026-09-05 실사용 중
+# 발견, AMD PC였으나 원인은 CPU와 무관). pywintypes.py의 검색 경로와 정확히 같은 폴더명
+# (pywin32_system32)으로 DLL을 직접 넣어서 훅 동작 여부와 무관하게 확실히 포함되게 한다.
+_site_packages = sysconfig.get_paths()["purelib"]
+_pywin32_system32_dir = os.path.join(_site_packages, "pywin32_system32")
+for _dll in glob.glob(os.path.join(_pywin32_system32_dir, "*.dll")):
+    binaries.append((_dll, "pywin32_system32"))
+tmp_ret = collect_all('pythoncom')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pywintypes')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('win32com')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
