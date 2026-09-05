@@ -142,6 +142,28 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         shutil.rmtree(new_dir, ignore_errors=True)
         raise RuntimeError(f"받은 배포판 안에 {exe_name}이 없습니다 (배포판 구조가 예상과 다름)")
 
+    # 배포 zip에는 exe 실행에 필요한 파일(exe 본체 + _internal)만 들어있고, config.json
+    # (사용자가 설정 화면에서 저장한 Qdrant URL/키, 위키 계정 등)이나
+    # mediawiki-mcp-server-windows.exe, incoming/, extracted_images/, extracted_text/처럼
+    # "설치 폴더에 함께 놓이지만 배포판 자체엔 안 담기는" 파일들은 없다. 폴더를 통째로
+    # 새 폴더와 맞바꾸면 이런 파일들이 구버전 폴더와 함께 통째로 사라지므로(구버전 폴더는
+    # 성공 후 삭제됨), 교체하기 전에 새 폴더로 미리 복사해둔다(2026-09-06, 실제 배포 전
+    # 설계 검토 중 발견 - 그대로 뒀으면 자기업데이트 한 번에 사용자의 저장된 설정이 통째로
+    # 날아갈 뻔함).
+    _PACKAGE_MANAGED_NAMES = {exe_name, "_internal"}
+    if app_dir.exists():
+        for item in app_dir.iterdir():
+            if item.name in _PACKAGE_MANAGED_NAMES:
+                continue
+            dest = new_dir / item.name
+            try:
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
+            except Exception:
+                pass  # 부가 파일 복사 실패가 업데이트 자체를 막을 이유는 아님(최선 노력)
+
     # 배치 스크립트: 실행 중인 exe가 든 폴더는 이 프로세스가 완전히 종료된 뒤에야 이름
     # 변경이 가능하다 - move가 성공할 때까지(최대 30초) 1초 간격으로 재시도해서 "프로세스
     # 종료 대기"를 구현한다(별도 PID 추적 없이 폴더 잠금 해제 자체를 신호로 씀). 폴더
