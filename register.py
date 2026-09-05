@@ -211,7 +211,15 @@ PROCESS_IMAGES = parse_yn(CONFIG["process_images"])
 STORE_IMAGE_BASE64 = parse_yn(CONFIG["store_image_base64"])
 TRANSLATE_CAPTION = parse_yn(CONFIG["translate_caption"])
 
-CHUNK_SIZE = 1500  # 800 -> 1500: 청크 수 자체를 줄여 저장 요청/배치 수를 더 줄임 (검색 정밀도 손해는 미미)
+# 1500 -> 1100: 실제 임베딩 모델(intfloat/multilingual-e5-large)의 토크나이저로 직접 측정한
+# 결과, 한글 텍스트는 글자당 약 0.43토큰이라 1500자짜리 청크는 약 639토큰이 되는데, 이 모델은
+# 512토큰까지만 처리하고 나머지는 조용히 잘라버린다(fastembed 내부 truncation) - 즉 긴 청크의
+# 뒤쪽 약 20%는 임베딩(검색용 벡터)에 전혀 반영되지 않고 있었다(전체 임베딩과 앞부분 절반만
+# 넣은 임베딩의 코사인 유사도가 0.99를 넘는 것으로 실측 확인 - 뒷부분이 벡터에 기여를
+# 거의 못 한다는 뜻). 원문 자체는 그대로 저장되니 데이터 유실은 아니지만, 청크 뒷부분
+# 내용만으로는 검색이 잘 안 걸리는 원인이었다. 512토큰 한도에 여유를 두고 1100자로 낮춰
+# 잘림 없이 전체 내용이 임베딩에 반영되게 함(1100자 * 0.43 ≈ 473토큰, 512 이내).
+CHUNK_SIZE = 1100
 CHUNK_OVERLAP = 200
 
 CAPTION_PROMPT = "Describe what this image shows and what information or meaning it conveys, in detail."
