@@ -194,6 +194,12 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         # 작업 디렉터리를 옮겨서 이 문제를 원천 차단한다. subprocess.Popen(cwd=...)로도
         # 동일하게 옮기지만, 이 배치 파일이 다른 경로로 실행되는 경우까지 대비해 이중으로 둠.
         f'cd /d "{tempfile.gettempdir()}"\r\n'
+        # 자연 종료(root.destroy() 이후 프로세스가 완전히 정리되기까지)를 그냥 기다리면
+        # 수십 초까지 걸릴 수 있어(2026-09-06 실사용 보고 - 재현은 됐으나 정상적으로도
+        # 20~30초가 걸림), 재시도에만 기대지 않고 시작하자마자 우리 자신의 exe를 강제
+        # 종료해서 첫 시도에 곧바로 성공하게 한다. 이미 종료돼 있으면 taskkill이 그냥
+        # 실패할 뿐 문제 없음(>nul 2>&1로 무시).
+        f'taskkill /f /im "{exe_name}" >nul 2>&1\r\n'
         f'if exist "{old_dir}" rmdir /s /q "{old_dir}" >nul 2>&1\r\n'
         f'if exist "{fail_log}" del /f /q "{fail_log}" >nul 2>&1\r\n'
         "set RETRIES=0\r\n"
