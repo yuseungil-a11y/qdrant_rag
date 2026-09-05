@@ -19,6 +19,7 @@ import hashlib
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -45,7 +46,9 @@ def check_for_app_update(current_version: str) -> dict:
             "manifest_entry": None, "latest_version": None,
         }
     try:
-        resp = requests.get(APP_MANIFEST_URL, timeout=10)
+        # raw.githubusercontent.com은 파일이 바뀐 뒤에도 몇 분간 CDN에 캐시된 이전 내용을
+        # 돌려줄 수 있다(실측 확인) - 매번 다른 쿼리 문자열을 붙여 캐시를 우회한다.
+        resp = requests.get(APP_MANIFEST_URL, params={"_": str(time.time())}, timeout=10)
         resp.raise_for_status()
         manifest = resp.json()
     except Exception as e:
