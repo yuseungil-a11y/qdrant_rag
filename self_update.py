@@ -96,21 +96,27 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
     new_exe.write_bytes(data)
 
     # 배치 스크립트: 실행 중인 exe는 "내용 덮어쓰기"는 막혀도 "이름 변경"은 이 프로세스가
-    # 완전히 종료된 뒤에야 가능하다 - move가 성공할 때까지(최대 15초) 1초 간격으로 재시도해서
+    # 완전히 종료된 뒤에야 가능하다 - move가 성공할 때까지(최대 30초) 1초 간격으로 재시도해서
     # "프로세스 종료 대기"를 구현한다(별도 PID 추적 없이 파일 잠금 해제 자체를 신호로 씀).
+    # 주의(2026-09-05, 실사용 중 발견된 버그): 이 배치는 콘솔 창 없이 백그라운드로 뜨는데,
+    # 예전 버전은 실패 시 pause(키 입력 대기)를 실행해서 입력을 받을 방법이 없어 영원히
+    # 멈춰버렸다 - utinfo_vdr.exe(원본)와 utinfo_vdr_new.exe(새 버전)가 둘 다 남은 채 멈춘
+    # 상태로 실제 보고됨. pause를 제거하고 실패 로그만 파일로 남기도록 수정.
     bat_path = Path(tempfile.gettempdir()) / f"{current_exe.stem}_update.bat"
     old_exe = current_exe.with_name(current_exe.stem + "_old.exe")
+    fail_log = current_exe.with_name(current_exe.stem + "_update_failed.log")
     bat_content = (
         "@echo off\r\n"
         "chcp 65001 > nul\r\n"
         "setlocal enabledelayedexpansion\r\n"
         f'if exist "{old_exe}" del /f /q "{old_exe}" >nul 2>&1\r\n'
+        f'if exist "{fail_log}" del /f /q "{fail_log}" >nul 2>&1\r\n'
         "set RETRIES=0\r\n"
         ":retry\r\n"
         f'move /y "{current_exe}" "{old_exe}" >nul 2>&1\r\n'
         "if errorlevel 1 (\r\n"
         "    set /a RETRIES+=1\r\n"
-        "    if !RETRIES! GEQ 15 goto :giveup\r\n"
+        "    if !RETRIES! GEQ 30 goto :giveup\r\n"
         "    timeout /t 1 /nobreak > nul\r\n"
         "    goto :retry\r\n"
         ")\r\n"
@@ -119,9 +125,8 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         f'del /f /q "{old_exe}" >nul 2>&1\r\n'
         "goto :cleanup\r\n"
         ":giveup\r\n"
-        f'echo 업데이트 실패: {current_exe.name}이 계속 사용 중입니다.\r\n'
+        f'echo update failed - {current_exe.name} was still in use after 30s > "{fail_log}"\r\n'
         f'if exist "{old_exe}" move /y "{old_exe}" "{current_exe}" >nul 2>&1\r\n'
-        "pause\r\n"
         ":cleanup\r\n"
         'del "%~f0"\r\n'
     )
@@ -129,6 +134,6 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
 
     subprocess.Popen(
         ["cmd", "/c", str(bat_path)],
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+        creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True,
     )
