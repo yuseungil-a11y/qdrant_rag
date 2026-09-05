@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "2.17.2"
+APP_VERSION = "2.17.3"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -132,7 +132,7 @@ class App:
         )
         self.shared_key_status_label.pack(side="left", padx=(12, 0))
         self.proposal_key_status_label = tk.Label(
-            version_bar, text="제안서키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
+            version_bar, text="전략기획실키: 확인 중...", fg="#888888", font=(KOREAN_FONT, 8),
         )
         self.proposal_key_status_label.pack(side="left", padx=(12, 0))
 
@@ -225,7 +225,7 @@ class App:
         # 마찬가지로 팀 전체가 보게 되므로 기본값은 항상 꺼짐.
         self.proposal_store_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
-            target_frame, text="제안서 자료 저장소에 등록",
+            target_frame, text="전략기획실 자료저장소 등록",
             variable=self.proposal_store_var, font=(KOREAN_FONT, 10, "bold"),
         ).pack(side="left", padx=(15, 0))
 
@@ -493,12 +493,12 @@ class App:
             )
         if register.MCP_URL_PROPOSAL:
             self._check_one_key_status(
-                "제안서", register.MCP_URL_PROPOSAL, self.proposal_key_status_label,
+                "전략기획실", register.MCP_URL_PROPOSAL, self.proposal_key_status_label,
             )
         else:
             self.root.after(
                 0,
-                lambda: self.proposal_key_status_label.config(text="제안서키: 미설정", fg="#888888"),
+                lambda: self.proposal_key_status_label.config(text="전략기획실키: 미설정", fg="#888888"),
             )
 
     def _check_one_key_status(self, label: str, mcp_url: str, status_widget: tk.Label):
@@ -615,7 +615,7 @@ class App:
         shared_entry.pack(fill="x", padx=10, pady=(2, 10))
 
         tk.Label(
-            qdrant_tab, text="제안서 자료 저장소 URL (mcp_url_proposal):", anchor="w", font=(KOREAN_FONT, 10),
+            qdrant_tab, text="전략기획실 자료저장소 URL (mcp_url_proposal):", anchor="w", font=(KOREAN_FONT, 10),
         ).pack(fill="x", padx=10, pady=(0, 0))
         proposal_entry = tk.Entry(qdrant_tab)
         proposal_entry.insert(0, register.CONFIG.get("mcp_url_proposal", ""))
@@ -636,7 +636,7 @@ class App:
             # 마치 재시작해야만 반영되는 것처럼 보였다 - 저장 성공 시 바로 재확인해서 갱신한다.
             self.personal_key_status_label.config(text="개인키: 확인 중...", fg="#888888")
             self.shared_key_status_label.config(text="공용키: 확인 중...", fg="#888888")
-            self.proposal_key_status_label.config(text="제안서키: 확인 중...", fg="#888888")
+            self.proposal_key_status_label.config(text="전략기획실키: 확인 중...", fg="#888888")
             threading.Thread(target=self._check_key_status_on_startup, daemon=True).start()
 
         tk.Button(qdrant_tab, text="저장", command=save_qdrant_urls).pack(anchor="e", padx=10, pady=(4, 10))
@@ -1133,7 +1133,7 @@ class App:
             return
         if not messagebox.askyesno(
             "삭제 확인",
-            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 팀 공유/개인/제안서 자료 저장소 "
+            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 팀 공유/개인/전략기획실 자료저장소 "
             "세 곳 모두에서 삭제합니다(등록 안 됐던 곳은 그냥 건너뜁니다).\n"
             "이 작업은 되돌릴 수 없습니다.\n\n" + source,
         ):
