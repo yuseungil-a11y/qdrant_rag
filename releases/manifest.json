@@ -1,7 +1,7 @@
 {
-  "version": "2.17.0",
+  "version": "2.17.1",
   "windows": {
-    "path": "releases/windows/utinfo_vdr-2.17.0.exe",
-    "sha256": "4abaa2d6f44460fde8eeacba5992df6a25b681252ea711532b4720938e1ca122"
+    "path": "releases/windows/utinfo_vdr-2.17.1.exe",
+    "sha256": "e80c5df65e731c1191b2c55149e2bd757e2d25bfc69ac2d02463f2376f3bb471"
   }
 }
