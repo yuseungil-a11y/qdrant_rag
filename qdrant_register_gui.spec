@@ -127,19 +127,29 @@ if sys.platform == 'darwin':
         bundle_identifier='co.kr.utinfo.qdrant-register-gui',
     )
 else:
+    # onefile(단일 exe)은 실행할 때마다 수백~수천 개 파일을 %TEMP%\_MEI<pid>에 압축
+    # 해제하는데, 이 압축해제 과정이 일부 배포 환경(백신 실시간 검사, 일부 VM 등)에서
+    # 불안정하게 방해받아 "Failed to load Python DLL", "Module 'pywintypes' isn't in
+    # frozen sys.path", jsonschema 데이터 폴더 누락 등 매번 다른 파일이 빠진 것처럼 보이는
+    # 에러로 이어지는 사례가 실사용 중 다수 확인됨(2026-09-06, 서로 다른 PC/VM 세 곳에서
+    # 각기 다른 파일 누락 증상 - 근본 원인은 개별 파일 문제가 아니라 onefile의 실행 시점
+    # 압축해제 자체의 불안정성으로 판단). macOS가 이미 같은 종류의 이유(Gatekeeper/코드사인
+    # 검증과의 충돌)로 onedir를 쓰고 있어, Windows도 onedir(설치 폴더 배포, 실행할 때마다
+    # 압축해제하지 않고 미리 풀린 파일을 그대로 씀)로 전환한다. 대신 배포 산출물이 exe 파일
+    # 하나가 아니라 폴더가 되므로, 자기업데이트(self_update.py)도 zip 다운로드+폴더 통째
+    # 교체 방식으로 다시 작성됨 - 이 변경 이전 onefile 버전을 쓰던 사용자는 자기업데이트로
+    # 넘어올 수 없어 최초 1회 수동 재설치가 필요하다.
     exe = EXE(
         pyz,
         a.scripts,
-        a.binaries,
-        a.datas,
         [],
+        exclude_binaries=True,
         name='utinfo_vdr',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
         upx=True,
         upx_exclude=[],
-        runtime_tmpdir=None,
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=False,
@@ -147,4 +157,13 @@ else:
         codesign_identity=None,
         entitlements_file=None,
         icon='icon.ico',
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name='utinfo_vdr',
     )
