@@ -35,6 +35,23 @@ def _version_tuple(v: str) -> tuple[int, ...]:
         return (0,)
 
 
+def cleanup_stale_update_files() -> None:
+    """이전 업데이트에서 남은 <exe명>_old.exe/<exe명>_update_failed.log가 있으면 프로그램
+    시작 시 조용히 지운다. 이 시점엔 이미 새 exe로 실행 중이라 old_exe를 잠글 프로세스가
+    없으므로 안전하게 지울 수 있다(배치 스크립트의 삭제 재시도가 실패했거나, 아주 예전
+    버전이 pause에 멈춰있다가 사용자가 수동으로 정리한 뒤 남은 부산물 등 대비)."""
+    if not (sys.platform == "win32" and getattr(sys, "frozen", False)):
+        return
+    try:
+        current_exe = Path(sys.executable).resolve()
+        for suffix in ("_old.exe", "_update_failed.log"):
+            stale = current_exe.with_name(current_exe.stem + suffix)
+            if stale.exists():
+                stale.unlink(missing_ok=True)
+    except Exception:
+        pass  # 정리 실패해도 앱 실행 자체를 막을 이유는 없음
+
+
 def check_for_app_update(current_version: str) -> dict:
     """반환: {"ok": bool, "update_available": bool, "message": str, "manifest_entry": dict|None,
     "latest_version": str|None}
@@ -122,7 +139,20 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         ")\r\n"
         f'move /y "{new_exe}" "{current_exe}"\r\n'
         f'start "" "{current_exe}"\r\n'
+        # {old_exe} 삭제도 방금 막 이름 바뀐 파일이라 백신 검사 등으로 아주 잠깐 잠길 수 있어
+        # (2026-09-05 실사용 중 utinfo_vdr_old.exe가 안 지워지고 남는 것으로 확인됨),
+        # 재시도 없이 한 번만 시도하던 것을 최대 10초 재시도로 바꿈 - 그래도 실패하면
+        # 기능상 문제는 없고(다음 실행 파일 이름은 이미 정상) 남은 파일은 그냥 무시.
+        "set DELRETRIES=0\r\n"
+        ":delretry\r\n"
         f'del /f /q "{old_exe}" >nul 2>&1\r\n'
+        f'if exist "{old_exe}" (\r\n'
+        "    set /a DELRETRIES+=1\r\n"
+        "    if !DELRETRIES! LSS 10 (\r\n"
+        "        timeout /t 1 /nobreak > nul\r\n"
+        "        goto :delretry\r\n"
+        "    )\r\n"
+        ")\r\n"
         "goto :cleanup\r\n"
         ":giveup\r\n"
         f'echo update failed - {current_exe.name} was still in use after 30s > "{fail_log}"\r\n'

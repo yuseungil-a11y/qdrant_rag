@@ -37,6 +37,15 @@ tmp_ret = collect_all('lxml')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('bs4')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# pydantic_core는 Rust로 컴파일된 확장 모듈이라, PyInstaller의 자동 의존성 분석이 이걸
+# 놓치는 경우가 있다 - 이 경우 개발 PC(모듈이 이미 설치돼 있어 어떤 경로로든 로드됨)에서는
+# 멀쩡히 동작하는 것처럼 보여도, 다른 PC(exe만 실행)에서는
+# "ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'"로 시작부터 죽는다
+# (2026-09-05 실사용 중 발견 - AMD PC에서 재현, 원인은 CPU 제조사와 무관하고 순수 번들링 누락).
+tmp_ret = collect_all('pydantic')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('pydantic_core')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(

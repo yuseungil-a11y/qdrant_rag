@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "2.17.0"
+APP_VERSION = "2.17.1"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -448,6 +448,7 @@ class App:
         self._spinner_idx = 0
         self.root.after(100, self.poll_queue)
         threading.Thread(target=self._check_key_status_on_startup, daemon=True).start()
+        self_update.cleanup_stale_update_files()
         threading.Thread(target=self._check_app_update_on_startup, daemon=True).start()
 
     # 상태 표시줄을 정적 텍스트 대신 회전 스피너 + 색상으로 표시해, 처리 중인지 대기 중인지
