@@ -184,6 +184,16 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         "@echo off\r\n"
         "chcp 65001 > nul\r\n"
         "setlocal enabledelayedexpansion\r\n"
+        # 중요(2026-09-06, 실사용 중 재현/확정): 이 배치를 실행하는 cmd.exe가 "현재 작업
+        # 디렉터리"로 설치 폴더 자신을 물려받으면(더블클릭으로 실행된 GUI exe의 기본
+        # 작업 디렉터리가 자기 exe가 있는 폴더라 그대로 상속됨), Windows는 어떤 프로세스가
+        # "현재 위치"로 쓰고 있는 폴더의 이름 변경(rename/move)을 거부한다 - 구버전
+        # 프로세스를 완전히 종료해도 이 배치 스크립트 자신이 그 폴더를 붙잡고 있어 100%
+        # 재현되는 구조적 실패였다(로컬 재현 테스트로 확정 - 다른 프로세스 없이도 이
+        # 이유만으로 30초 내내 실패). 배치 시작하자마자 설치 폴더 밖(임시 폴더)으로
+        # 작업 디렉터리를 옮겨서 이 문제를 원천 차단한다. subprocess.Popen(cwd=...)로도
+        # 동일하게 옮기지만, 이 배치 파일이 다른 경로로 실행되는 경우까지 대비해 이중으로 둠.
+        f'cd /d "{tempfile.gettempdir()}"\r\n'
         f'if exist "{old_dir}" rmdir /s /q "{old_dir}" >nul 2>&1\r\n'
         f'if exist "{fail_log}" del /f /q "{fail_log}" >nul 2>&1\r\n'
         "set RETRIES=0\r\n"
@@ -227,4 +237,5 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         ["cmd", "/c", str(bat_path)],
         creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True,
+        cwd=tempfile.gettempdir(),
     )
