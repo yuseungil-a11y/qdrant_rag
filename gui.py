@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "2.16.0"
+APP_VERSION = "2.16.1"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -201,7 +201,7 @@ class App:
         canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
 
         # --- Qdrant 문서 등록 (register.py, 벡터DB 등록 - AI가 내용을 검색/답변에 활용할 수 있게 함) ---
-        qdrant_frame = tk.LabelFrame(top, text="Qdrant 문서 등록")
+        qdrant_frame = tk.LabelFrame(top, text="벡터저장소 파일등록")
         qdrant_frame.pack(fill="x", padx=10, pady=(10, 0))
 
         # 개인/공용 체크박스는 파일/폴더/드래그앤드롭/텍스트 붙여넣기 등록 전부에 적용되는
@@ -257,7 +257,7 @@ class App:
         self.status_label = tk.Label(btn_frame, text="● 대기 중", fg="#555555")
         self.status_label.pack(side="right")
 
-        paste_frame = tk.LabelFrame(top, text="텍스트 붙여넣기로 등록")
+        paste_frame = tk.LabelFrame(top, text="벡터저장소 텍스트 등록")
         paste_frame.pack(fill="x", padx=10, pady=(10, 0))
 
         paste_title_frame = tk.Frame(paste_frame)
@@ -292,7 +292,7 @@ class App:
             anchor="e", padx=5, pady=5
         )
 
-        delete_frame = tk.LabelFrame(top, text="파일 단위 삭제 (되돌릴 수 없음)", fg="#a33")
+        delete_frame = tk.LabelFrame(top, text="벡터저장소 파일 단위삭제(되돌릴 수 없음)", fg="#a33")
         delete_frame.pack(fill="x", padx=10, pady=(10, 0))
 
         delete_row = tk.Frame(delete_frame)
