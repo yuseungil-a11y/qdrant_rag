@@ -35,15 +35,39 @@ RAW_BASE_URL = "https://raw.githubusercontent.com/yuseungil-a11y/qdrant_rag/main
 
 
 def find_claude_config_path() -> Path:
-    """Claude 데스크톱 앱의 claude_desktop_config.json 경로 (OS별 표준 위치).
-    Windows Store 패키지형 설치는 AppData\\Local\\Packages\\Claude_*\\LocalCache\\Roaming\\Claude로도
-    보이지만 실제로는 표준 %APPDATA%\\Claude 경로와 동일한 파일(리다이렉션)이므로 표준 경로 하나만 쓴다."""
+    """Claude 데스크톱 앱의 claude_desktop_config.json 표준 경로 (OS별). 저장은 이 경로
+    하나만이 아니라 find_claude_config_paths()의 모든 후보에 함께 하므로, 이 함수는
+    "읽기 우선 순위 1번"이나 로그 표시용으로만 쓴다."""
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
         return Path(appdata) / "Claude" / "claude_desktop_config.json"
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
+
+
+def find_claude_config_paths() -> list[Path]:
+    """Claude 데스크톱 앱이 실제로 읽어들일 수 있는 claude_desktop_config.json 후보 경로
+    전부. Windows Store 패키지형 설치는 AppData\\Local\\Packages\\Claude_*\\LocalCache\\
+    Roaming\\Claude에도 같은 이름의 파일이 있는데, PC에 따라 이게 표준 %APPDATA%\\Claude
+    경로와 하드링크로 같은 파일이기도 하고(확인된 사례 있음), 완전히 별도의 파일이기도
+    하다(2026-09-05 실사용 중 발견 - 설정 화면에서 "저장됨"으로 나왔는데 실제로 사용자가
+    확인한 Packages 쪽 파일은 그대로였음). 어느 쪽인지 매번 확실히 알 방법이 없으므로,
+    존재하는 후보 모두에 저장해서 안전하게 동기화한다."""
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        localappdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        paths = [Path(appdata) / "Claude" / "claude_desktop_config.json"]
+        packages_dir = Path(localappdata) / "Packages"
+        if packages_dir.is_dir():
+            for pkg in packages_dir.glob("Claude_*"):
+                candidate = pkg / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json"
+                if candidate not in paths:
+                    paths.append(candidate)
+        return paths
+    if sys.platform == "darwin":
+        return [Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"]
+    return [Path.home() / ".config" / "Claude" / "claude_desktop_config.json"]
 
 
 def find_npx() -> str | None:
@@ -126,13 +150,17 @@ SERVER_TEMPLATES: dict[str, dict] = {
 
 
 def load_claude_config() -> dict:
-    path = find_claude_config_path()
-    if not path.exists():
-        return {"mcpServers": {}}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise RuntimeError(f"claude_desktop_config.json 읽기 실패: {e}")
+    """존재하는 후보 경로 중 첫 번째(표준 %APPDATA% 우선)를 읽는다. 두 후보가 서로 다른
+    내용이라 해도, GUI 입력칸을 채우는 용도로는 표준 경로 쪽을 기준으로 삼는다 - 실제
+    저장은 항상 모든 후보에 함께 하므로(save_server_config), 이 프로그램으로 한 번이라도
+    저장한 뒤에는 둘 다 같은 내용이 된다."""
+    for path in find_claude_config_paths():
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception as e:
+                raise RuntimeError(f"{path} 읽기 실패: {e}")
+    return {"mcpServers": {}}
 
 
 def resolve_exe_path(server_key: str) -> str | None:
@@ -156,13 +184,16 @@ def get_existing_server_config(server_key: str) -> dict:
     return data.get("mcpServers", {}).get(server_key, {})
 
 
-def save_server_config(server_key: str, field_values: dict[str, str], exe_path: str | None = None) -> Path:
+def save_server_config(server_key: str, field_values: dict[str, str], exe_path: str | None = None) -> list[Path]:
     """field_values: 사용자가 입력한 (ENV_KEY -> 값) 중 이 서버의 fields에 해당하는 것만.
     exe_path: kind="exe" 서버일 때 실행 파일 경로 (자동탐지됐거나 사용자가 지정한 값) - 필수.
     기존 claude_desktop_config.json에서 이 서버 블록 하나만 만들거나 덮어쓰고, 다른 서버/다른
-    최상위 키는 절대 건드리지 않는다. 저장된 경로를 반환한다."""
+    최상위 키는 절대 건드리지 않는다.
+    find_claude_config_paths()의 모든 후보 경로에 동일하게 저장한다 - Windows 패키지형 설치가
+    표준 경로와 별도 파일을 쓰는 경우(하드링크가 아닌 경우)에도 확실히 반영되도록 하기 위함
+    (2026-09-05 실사용 중 발견: 표준 경로에만 저장했더니 사용자가 실제로 확인한 Packages
+    경로 쪽 파일은 그대로였음). 실제로 저장에 성공한 경로 목록을 반환한다."""
     template = SERVER_TEMPLATES[server_key]
-    path = find_claude_config_path()
     data = load_claude_config()
     data.setdefault("mcpServers", {})
 
@@ -177,10 +208,14 @@ def save_server_config(server_key: str, field_values: dict[str, str], exe_path: 
         entry = {"command": exe_path, "env": env}
 
     data["mcpServers"][server_key] = entry
+    text = json.dumps(data, ensure_ascii=False, indent=2)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    saved_paths = []
+    for path in find_claude_config_paths():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        saved_paths.append(path)
+    return saved_paths
 
 
 def _file_sha256(path: str | Path) -> str | None:

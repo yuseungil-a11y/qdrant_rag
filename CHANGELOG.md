@@ -5,6 +5,18 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 2.17.2
+
+- **버그 수정**: "설정 → MCP 연동" 탭에서 값을 바꾸고 "저장"을 눌러도 실제
+  `claude_desktop_config.json`에 반영이 안 되는 것처럼 보이던 문제 수정 - 원인은
+  Windows Store(패키지형) 설치가 표준 `%APPDATA%\Claude\` 경로와
+  `AppData\Local\Packages\Claude_*\LocalCache\Roaming\Claude\` 경로를 PC에 따라
+  하드링크(같은 파일)로 쓰기도 하고 완전히 별도 파일로 쓰기도 한다는 것이었음(실사용
+  중 발견: 표준 경로에만 저장했는데 사용자가 확인한 Packages 쪽 파일은 그대로였음).
+  `mcp_config_helper.find_claude_config_paths()`가 두 경로 후보를 모두 찾아서
+  `save_server_config()`가 존재/생성 가능한 모든 후보에 동일하게 저장하도록 함 - 어느
+  경로가 실제로 쓰이든 확실히 반영됨. macOS는 이 경로 이중화 자체가 없어 해당 없음.
+
 ## 2.17.1
 
 - **버그 수정(심각)**: 배포된 exe가 다른 PC(빌드에 쓴 개발 PC 외)에서 시작하자마자

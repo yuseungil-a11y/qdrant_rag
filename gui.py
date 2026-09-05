@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "2.17.1"
+APP_VERSION = "2.17.2"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -861,7 +861,7 @@ class App:
                     return
 
         try:
-            saved_path = mcp_config_helper.save_server_config(server_key, field_values, exe_path=exe_path)
+            saved_paths = mcp_config_helper.save_server_config(server_key, field_values, exe_path=exe_path)
         except Exception as e:
             self.log(f"[오류] {template['label']} MCP 설정 저장 실패: {e}")
             return
@@ -872,8 +872,9 @@ class App:
         if "exe_status" in widgets:
             widgets["exe_status"].config(text="✓ 저장됨", fg="#2e7d32")
 
+        paths_text = ", ".join(str(p) for p in saved_paths)
         self.log(
-            f"[안내] {template['label']} MCP 설정을 저장했습니다 ({saved_path}). "
+            f"[안내] {template['label']} MCP 설정을 저장했습니다 ({len(saved_paths)}개 경로: {paths_text}). "
             "Claude 데스크톱 앱을 재시작해야 적용됩니다."
         )
 
