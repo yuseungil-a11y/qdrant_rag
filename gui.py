@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "2.16.4"
+APP_VERSION = "2.17.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -629,6 +629,14 @@ class App:
                 return
             register.save_mcp_urls(personal, shared, proposal)
             self.log("[안내] Qdrant 저장소 설정을 저장했습니다 (config.json)")
+            # register.save_mcp_urls()가 register.MCP_URL 등 전역값은 이미 즉시 갱신하지만,
+            # 상단 "개인키/공용키/제안서키" 상태 표시줄은 시작할 때 한 번만 확인하고는 자동으로
+            # 다시 확인하지 않아서, 저장 직후에는 여전히 예전 상태(또는 "미설정")로 남아있어
+            # 마치 재시작해야만 반영되는 것처럼 보였다 - 저장 성공 시 바로 재확인해서 갱신한다.
+            self.personal_key_status_label.config(text="개인키: 확인 중...", fg="#888888")
+            self.shared_key_status_label.config(text="공용키: 확인 중...", fg="#888888")
+            self.proposal_key_status_label.config(text="제안서키: 확인 중...", fg="#888888")
+            threading.Thread(target=self._check_key_status_on_startup, daemon=True).start()
 
         tk.Button(qdrant_tab, text="저장", command=save_qdrant_urls).pack(anchor="e", padx=10, pady=(4, 10))
 
@@ -677,7 +685,7 @@ class App:
             mcp_tab_outer,
             text="사내 MCP 서버 접속 정보를 입력하면 claude_desktop_config.json에 자동으로 반영합니다"
                  " (저장 후 Claude 데스크톱 앱을 재시작해야 적용됨)",
-            fg="#666666", anchor="w", wraplength=560, justify="left",
+            fg="#c0392b", font=(KOREAN_FONT, 9, "bold"), anchor="w", wraplength=560, justify="left",
         ).pack(fill="x", padx=10, pady=(10, 5))
 
         # 탭 안 내용이 창보다 길어질 수 있어 자체 스크롤 캔버스로 감싼다.
