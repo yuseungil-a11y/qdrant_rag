@@ -138,6 +138,13 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         "    goto :retry\r\n"
         ")\r\n"
         f'move /y "{new_exe}" "{current_exe}"\r\n'
+        # 방금 막 생긴(인터넷에서 받은) exe를 백신(Windows Defender 등)이 실시간으로 스캔
+        # 중일 수 있어, move 직후 곧바로 실행하면 그 스캔과 겹쳐 "Failed to load Python DLL"
+        # 류의 오류가 날 수 있다(2026-09-06 실사용 보고 - macOS M4 VMware Windows 11 ARM64
+        # 환경: 같은 exe를 수동으로 내려받아 교체했을 땐 정상 실행되지만, 자기업데이트로
+        # move 직후 바로 실행했을 때만 이 오류가 재현됨 - 백신 스캔 타이밍 경합으로 추정).
+        # 스캔이 끝날 시간을 벌기 위해 실행 전 짧게 대기.
+        "timeout /t 2 /nobreak > nul\r\n"
         f'start "" "{current_exe}"\r\n'
         # {old_exe} 삭제도 방금 막 이름 바뀐 파일이라 백신 검사 등으로 아주 잠깐 잠길 수 있어
         # (2026-09-05 실사용 중 utinfo_vdr_old.exe가 안 지워지고 남는 것으로 확인됨),
