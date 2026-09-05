@@ -1432,6 +1432,18 @@ async def search_my_qdrant(query: str) -> list[dict]:
     return _keyword_filter(query, parsed)
 
 
+async def search_proposal_qdrant(query: str) -> list[dict]:
+    """qdrant_find_proposal로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
+    전략기획실 자료저장소 전용 키(MCP_URL_PROPOSAL)로 호출 - search_qdrant()의 전략기획실
+    저장소 버전. entry 형식이 같은 공용 저장소와 동일해서 delete_proposal_by_metadata()가
+    source(+chunk_index 또는 +page+image_index)로 그대로 삭제할 수 있다."""
+    if not MCP_URL_PROPOSAL:
+        print("[안내] config.json에 mcp_url_proposal이 설정되지 않아 전략기획실 저장소 검색을 건너뜁니다.")
+        return []
+    parsed = await _raw_find("qdrant_find_proposal", query, MCP_URL_PROPOSAL)
+    return _keyword_filter(query, parsed)
+
+
 async def delete_mine_by_source(source: str) -> int:
     """개인 저장소에서 source(파일 경로)에 해당하는 항목을 전부 삭제한다.
     게이트웨이의 qdrant_delete_mine이 이제 qdrant_delete와 동일하게 source 서버 사이드 정확
@@ -1463,18 +1475,6 @@ async def delete_proposal_by_source(source: str) -> int:
     else:
         print(f"제안서 자료 저장소: {deleted}개 항목 삭제: {source!r}")
     return deleted
-
-
-async def delete_from_all(source: str) -> int:
-    """팀 공유(qdrant_delete), 개인 저장소(qdrant_delete_mine), 제안서 자료 저장소
-    (qdrant_delete_proposal) 세 곳 모두 source 정확 필터로 이 source에 해당하는 항목을
-    전부 지운다. "파일 단위 삭제" GUI가 쓴다. 등록 당시 체크박스와 무관하게 항상 세 곳 다
-    시도하며(등록 안 됐던 곳은 그냥 0건 삭제로 조용히 끝남), 그래서 "이 파일이 어디에
-    등록됐었는지" 따로 추적할 필요가 없다."""
-    deleted_shared = await delete_by_source(source)
-    deleted_mine = await delete_mine_by_source(source)
-    deleted_proposal = await delete_proposal_by_source(source)
-    return deleted_shared + deleted_mine + deleted_proposal
 
 
 async def delete_mine_by_metadata(metadata: dict) -> int:
@@ -1515,6 +1515,36 @@ async def delete_mine_by_metadata(metadata: dict) -> int:
         print(f"삭제할 항목이 없습니다: {label}")
     else:
         print(f"삭제 완료(개인 저장소): {label}")
+    return deleted
+
+
+async def delete_proposal_by_metadata(metadata: dict) -> int:
+    """search_proposal_qdrant()로 얻은 metadata를 그대로 넘기면, source(+chunk_index 또는
+    +page+image_index)로 정확히 그 항목 하나만 전략기획실 자료저장소에서 골라서 삭제한다
+    (delete_by_metadata()의 전략기획실 저장소 버전)."""
+    source = metadata.get("source")
+    if not source:
+        print("[오류] source가 없는 항목은 삭제할 수 없습니다.")
+        return 0
+    if not MCP_URL_PROPOSAL:
+        print("[안내] config.json에 mcp_url_proposal이 설정되지 않아 전략기획실 저장소 작업을 건너뜁니다.")
+        return 0
+
+    args = {"source": source}
+    if metadata.get("type") == "image":
+        if metadata.get("page") is not None:
+            args["page"] = metadata["page"]
+        if metadata.get("image_index") is not None:
+            args["image_index"] = metadata["image_index"]
+    elif metadata.get("chunk_index") is not None:
+        args["chunk_index"] = metadata["chunk_index"]
+
+    deleted = await _call_delete_tool("qdrant_delete_proposal", args, MCP_URL_PROPOSAL)
+    label = metadata.get("title") or source
+    if deleted == 0:
+        print(f"삭제할 항목이 없습니다: {label}")
+    else:
+        print(f"삭제 완료(전략기획실 저장소): {label} ({deleted}개)")
     return deleted
 
 

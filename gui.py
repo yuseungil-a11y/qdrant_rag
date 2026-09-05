@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "2.17.3"
+APP_VERSION = "2.18.0"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -303,8 +303,18 @@ class App:
         tk.Button(delete_row, text="파일 선택...", command=self.browse_delete_source).pack(side="left")
         tk.Button(delete_row, text="삭제", fg="#a33", command=self.start_delete).pack(side="left", padx=(5, 0))
 
+        # 명시적 사용자 요청: "키워드로 검색해서 삭제 기능은 벡터 저장소 체크 박스가 있는 것
+        # 중 검색해서 삭제하는 기능은 어때, 단 체크박스는 한개만 되어 있어야 함" - 예전엔
+        # "공용 전용"/"내 개인 전용" 두 섹션이 따로 있었는데(전략기획실 저장소는 검색할
+        # 방법 자체가 없었음), 상단 개인/공용/전략기획실 체크박스 중 정확히 1개가 켜져 있을
+        # 때 그 저장소 하나를 대상으로 검색/삭제하는 섹션 하나로 통합.
         search_frame = tk.LabelFrame(top, text="키워드로 검색해서 삭제 (되돌릴 수 없음)", fg="#a33")
         search_frame.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Label(
+            search_frame,
+            text="상단 개인/공용/전략기획실 체크박스 중 정확히 1개를 체크한 상태에서 검색/삭제됩니다",
+            fg="#666666", anchor="w",
+        ).pack(fill="x", padx=5, pady=(5, 0))
 
         search_row = tk.Frame(search_frame)
         search_row.pack(fill="x", padx=5, pady=5)
@@ -325,36 +335,10 @@ class App:
         self.search_listbox.pack(side="left", fill="both", expand=True)
         search_scrollbar.config(command=self.search_listbox.yview)
         self.search_results: list[dict] = []
+        self.search_target: str | None = None  # 검색 당시 대상이었던 저장소("personal"/"shared"/"proposal")
 
         tk.Button(
             search_frame, text="선택 항목 삭제", fg="#a33", command=self.start_delete_selected,
-        ).pack(anchor="e", padx=5, pady=5)
-
-        my_search_frame = tk.LabelFrame(top, text="내 개인 저장소에서 검색해서 삭제 (되돌릴 수 없음)", fg="#a33")
-        my_search_frame.pack(fill="x", padx=10, pady=(10, 0))
-
-        my_search_row = tk.Frame(my_search_frame)
-        my_search_row.pack(fill="x", padx=5, pady=5)
-        tk.Label(my_search_row, text="검색어:").pack(side="left")
-        self.my_search_entry = tk.Entry(my_search_row)
-        self.my_search_entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
-        self.my_search_entry.bind("<Return>", lambda e: self.start_my_search())
-        tk.Button(my_search_row, text="검색", command=self.start_my_search).pack(side="left")
-
-        my_search_result_frame = tk.Frame(my_search_frame)
-        my_search_result_frame.pack(fill="x", padx=5)
-        my_search_scrollbar = tk.Scrollbar(my_search_result_frame)
-        my_search_scrollbar.pack(side="right", fill="y")
-        self.my_search_listbox = tk.Listbox(
-            my_search_result_frame, height=4, selectmode="extended",
-            yscrollcommand=my_search_scrollbar.set, font=(MONO_FONT, 9),
-        )
-        self.my_search_listbox.pack(side="left", fill="both", expand=True)
-        my_search_scrollbar.config(command=self.my_search_listbox.yview)
-        self.my_search_results: list[dict] = []
-
-        tk.Button(
-            my_search_frame, text="선택 항목 삭제", fg="#a33", command=self.start_delete_my_selected,
         ).pack(anchor="e", padx=5, pady=5)
 
         # --- 위키 문서 등록 (wiki_upload.py, MediaWiki 자동 업로드) ---
@@ -1003,6 +987,18 @@ class App:
     def current_store_flags(self) -> tuple[bool, bool, bool]:
         return self.personal_store_var.get(), self.shared_store_var.get(), self.proposal_store_var.get()
 
+    _STORE_TARGET_LABELS = {"personal": "개인", "shared": "공용", "proposal": "전략기획실"}
+
+    def single_checked_store(self) -> str | None:
+        """개인/공용/전략기획실 체크박스 중 정확히 1개만 켜져 있으면 그 이름
+        ("personal"/"shared"/"proposal")을 돌려주고, 0개거나 2개 이상이면 None을 돌려준다
+        (명시적 사용자 요청: "체크박스는 한개만 되어 있어야 함" - 파일 단위 삭제/키워드
+        검색삭제가 어느 저장소를 대상으로 할지 상단 체크박스로 정하기 때문에, 이 기능들을
+        쓸 때는 등록용 다중 체크와 달리 정확히 하나만 골라야 한다)."""
+        personal, shared, proposal = self.current_store_flags()
+        checked = [name for name, v in (("personal", personal), ("shared", shared), ("proposal", proposal)) if v]
+        return checked[0] if len(checked) == 1 else None
+
     def start_registration(self, paths: list[Path]):
         if self.busy:
             self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
@@ -1131,24 +1127,33 @@ class App:
         if not source:
             self.log("[알림] 삭제할 파일을 선택하거나 경로를 입력하세요.")
             return
+        target = self.single_checked_store()
+        if target is None:
+            self.log("[알림] 상단 개인/공용/전략기획실 체크박스 중 정확히 하나만 체크하세요.")
+            return
+        label = self._STORE_TARGET_LABELS[target]
         if not messagebox.askyesno(
             "삭제 확인",
-            "다음 파일에서 등록된 모든 내용(텍스트+이미지)을 팀 공유/개인/전략기획실 자료저장소 "
-            "세 곳 모두에서 삭제합니다(등록 안 됐던 곳은 그냥 건너뜁니다).\n"
+            f"다음 파일에서 등록된 모든 내용(텍스트+이미지)을 {label} 저장소에서 삭제합니다.\n"
             "이 작업은 되돌릴 수 없습니다.\n\n" + source,
         ):
             return
         self.busy = True
         self.set_status("삭제 중")
-        threading.Thread(target=self.run_delete, args=(source,), daemon=True).start()
+        threading.Thread(target=self.run_delete, args=(source, target), daemon=True).start()
 
-    def run_delete(self, source: str):
+    def run_delete(self, source: str, target: str):
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
         sys.stderr = writer
         try:
-            asyncio.run(register.delete_from_all(source))
+            if target == "personal":
+                asyncio.run(register.delete_mine_by_source(source))
+            elif target == "shared":
+                asyncio.run(register.delete_by_source(source))
+            else:
+                asyncio.run(register.delete_proposal_by_source(source))
         except Exception as e:
             self.log(f"[오류] {e}")
         finally:
@@ -1165,17 +1170,27 @@ class App:
         if not query:
             self.log("[알림] 검색어를 입력하세요.")
             return
+        target = self.single_checked_store()
+        if target is None:
+            self.log("[알림] 상단 개인/공용/전략기획실 체크박스 중 정확히 하나만 체크하세요.")
+            return
         self.busy = True
         self.set_status("검색 중")
-        threading.Thread(target=self.run_search, args=(query,), daemon=True).start()
+        threading.Thread(target=self.run_search, args=(query, target), daemon=True).start()
 
-    def run_search(self, query: str):
+    def run_search(self, query: str, target: str):
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
         sys.stderr = writer
         try:
-            results = asyncio.run(register.search_qdrant(query))
+            if target == "personal":
+                results = asyncio.run(register.search_my_qdrant(query))
+            elif target == "shared":
+                results = asyncio.run(register.search_qdrant(query))
+            else:
+                results = asyncio.run(register.search_proposal_qdrant(query))
+            self.search_target = target
             self.root.after(0, lambda: self.populate_search_results(results))
         except Exception as e:
             self.log(f"[오류] {e}")
@@ -1188,12 +1203,13 @@ class App:
     def populate_search_results(self, results: list[dict]):
         self.search_results = results
         self.search_listbox.delete(0, "end")
+        label = self._STORE_TARGET_LABELS.get(self.search_target, "?")
         if not results:
-            self.log("[알림] 검색 결과가 없습니다.")
+            self.log(f"[알림] {label} 저장소 검색 결과가 없습니다.")
             return
         for r in results:
             meta = r.get("metadata", {})
-            title = meta.get("title") or meta.get("source", "?")
+            title = meta.get("title") or meta.get("source") or "(제목 없음)"
             if meta.get("type") == "image":
                 loc = f" [이미지 p{meta.get('page')}-{meta.get('image_index')}]"
             elif meta.get("chunk_index") is not None:
@@ -1202,7 +1218,7 @@ class App:
                 loc = ""
             snippet = (r.get("content") or "").replace("\n", " ").strip()[:60]
             self.search_listbox.insert("end", f"{title}{loc} — {snippet}")
-        self.log(f"검색 결과 {len(results)}건 (목록에서 선택 후 '선택 항목 삭제')")
+        self.log(f"{label} 저장소 검색 결과 {len(results)}건 (목록에서 선택 후 '선택 항목 삭제')")
 
     def start_delete_selected(self):
         if self.busy:
@@ -1213,28 +1229,29 @@ class App:
             self.log("[알림] 삭제할 항목을 목록에서 선택하세요.")
             return
         selected = [self.search_results[i] for i in indices]
+        label = self._STORE_TARGET_LABELS.get(self.search_target, "?")
         preview = "\n".join(
-            f"- {r['metadata'].get('title') or r['metadata'].get('source')}" for r in selected[:10]
+            f"- {r['metadata'].get('title') or r['metadata'].get('source') or '(제목 없음)'}" for r in selected[:10]
         )
         if len(selected) > 10:
             preview += f"\n... 외 {len(selected) - 10}건"
         if not messagebox.askyesno(
             "삭제 확인",
-            f"선택한 {len(selected)}개 항목을 Qdrant에서 삭제합니다.\n"
+            f"{label} 저장소에서 선택한 {len(selected)}개 항목을 삭제합니다.\n"
             "이 작업은 되돌릴 수 없습니다.\n\n" + preview,
         ):
             return
         self.busy = True
         self.set_status("삭제 중")
-        threading.Thread(target=self.run_delete_selected, args=(selected,), daemon=True).start()
+        threading.Thread(target=self.run_delete_selected, args=(selected, self.search_target), daemon=True).start()
 
-    def run_delete_selected(self, selected: list[dict]):
+    def run_delete_selected(self, selected: list[dict], target: str):
         old_stdout, old_stderr = sys.stdout, sys.stderr
         writer = QueueWriter(self.msg_queue)
         sys.stdout = writer
         sys.stderr = writer
         try:
-            asyncio.run(self._delete_selected(selected))
+            asyncio.run(self._delete_selected(selected, target))
             self.root.after(0, lambda: self.search_listbox.delete(0, "end"))
             self.search_results = []
         except Exception as e:
@@ -1246,101 +1263,17 @@ class App:
             self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     @staticmethod
-    async def _delete_selected(selected: list[dict]) -> int:
+    async def _delete_selected(selected: list[dict], target: str) -> int:
         total = 0
         for item in selected:
-            total += await register.delete_by_metadata(item.get("metadata", {}))
+            meta = item.get("metadata", {})
+            if target == "personal":
+                total += await register.delete_mine_by_metadata(meta)
+            elif target == "shared":
+                total += await register.delete_by_metadata(meta)
+            else:
+                total += await register.delete_proposal_by_metadata(meta)
         print(f"선택 삭제 완료: 총 {total}개 항목 삭제")
-        return total
-
-    def start_my_search(self):
-        if self.busy:
-            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
-            return
-        query = self.my_search_entry.get().strip()
-        if not query:
-            self.log("[알림] 검색어를 입력하세요.")
-            return
-        self.busy = True
-        self.set_status("검색 중")
-        threading.Thread(target=self.run_my_search, args=(query,), daemon=True).start()
-
-    def run_my_search(self, query: str):
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        writer = QueueWriter(self.msg_queue)
-        sys.stdout = writer
-        sys.stderr = writer
-        try:
-            results = asyncio.run(register.search_my_qdrant(query))
-            self.root.after(0, lambda: self.populate_my_search_results(results))
-        except Exception as e:
-            self.log(f"[오류] {e}")
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
-
-    def populate_my_search_results(self, results: list[dict]):
-        self.my_search_results = results
-        self.my_search_listbox.delete(0, "end")
-        if not results:
-            self.log("[알림] 개인 저장소 검색 결과가 없습니다.")
-            return
-        for r in results:
-            meta = r.get("metadata", {})
-            title = meta.get("title") or meta.get("source") or "(제목 없음)"
-            snippet = (r.get("content") or "").replace("\n", " ").strip()[:60]
-            self.my_search_listbox.insert("end", f"{title} — {snippet}")
-        self.log(f"개인 저장소 검색 결과 {len(results)}건 (목록에서 선택 후 '선택 항목 삭제')")
-
-    def start_delete_my_selected(self):
-        if self.busy:
-            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
-            return
-        indices = self.my_search_listbox.curselection()
-        if not indices:
-            self.log("[알림] 삭제할 항목을 목록에서 선택하세요.")
-            return
-        selected = [self.my_search_results[i] for i in indices]
-        preview = "\n".join(
-            f"- {r['metadata'].get('title') or r['metadata'].get('source') or '(제목 없음)'}" for r in selected[:10]
-        )
-        if len(selected) > 10:
-            preview += f"\n... 외 {len(selected) - 10}건"
-        if not messagebox.askyesno(
-            "삭제 확인",
-            f"내 개인 저장소에서 선택한 {len(selected)}개 항목을 삭제합니다.\n"
-            "이 작업은 되돌릴 수 없습니다.\n\n" + preview,
-        ):
-            return
-        self.busy = True
-        self.set_status("삭제 중")
-        threading.Thread(target=self.run_delete_my_selected, args=(selected,), daemon=True).start()
-
-    def run_delete_my_selected(self, selected: list[dict]):
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        writer = QueueWriter(self.msg_queue)
-        sys.stdout = writer
-        sys.stderr = writer
-        try:
-            asyncio.run(self._delete_my_selected(selected))
-            self.root.after(0, lambda: self.my_search_listbox.delete(0, "end"))
-            self.my_search_results = []
-        except Exception as e:
-            self.log(f"[오류] {e}")
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-            self.busy = False
-            self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
-
-    @staticmethod
-    async def _delete_my_selected(selected: list[dict]) -> int:
-        total = 0
-        for item in selected:
-            total += await register.delete_mine_by_metadata(item.get("metadata", {}))
-        print(f"개인 저장소 선택 삭제 완료: 총 {total}개 항목 삭제")
         return total
 
     # --- 위키 문서 등록 ---
