@@ -1,7 +1,8 @@
 {
-  "version": "2.18.3",
+  "version": "3.0.0",
   "windows": {
-    "path": "releases/windows/utinfo_vdr-2.18.3.exe",
-    "sha256": "ef937335ff9515bc540e2977ccf66c18ac78e2330bfdfc443e4e64101982786e"
+    "path": "releases/windows/utinfo_vdr-3.0.0-win.zip",
+    "sha256": "b919a55e277b72a907e1ed2632f05abcb240b8f26b6328af4431b8e2b86607c6",
+    "format": "zip"
   }
 }
