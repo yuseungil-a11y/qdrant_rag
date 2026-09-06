@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "3.0.5"
+APP_VERSION = "3.0.6"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -1426,7 +1426,38 @@ class App:
             self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
 
+_single_instance_mutex = None  # 프로세스가 살아있는 동안 뮤텍스 핸들이 계속 참조돼야 하므로 전역에 보관
+
+
+def _acquire_single_instance_lock() -> bool:
+    """이미 실행 중인 인스턴스가 있으면 False, 없으면(=이 프로세스가 최초) True.
+    Windows 전용(네임드 뮤텍스) - 다른 OS는 검사 없이 항상 True(실사용 보고 대상이
+    Windows exe라 우선 Windows만 처리; macOS는 필요해지면 별도 방식 검토).
+
+    2026-09-06 실사용 보고: exe를 더블클릭했는데 여러 개가 뜬다는 문제 - 이 프로그램에
+    "이미 실행 중이면 막기" 장치가 아예 없어서, 창이 뜨기 전 잠깐 사이에 다시 더블클릭하면
+    그대로 두 번째 프로세스가 시작되고 있었다. 프로세스 시작 시점에 이름 있는 뮤텍스를
+    선점해서, 이미 있으면 안내만 하고 조용히 종료하도록 함."""
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    global _single_instance_mutex
+    ERROR_ALREADY_EXISTS = 183
+    _single_instance_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "UtinfoVDR_SingleInstance_Mutex")
+    return ctypes.windll.kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+
+
 def main():
+    if not _acquire_single_instance_lock():
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "이미 실행 중입니다. 실행 중인 창을 확인해주세요.",
+                "유티정보 벡터 등록 프로그램",
+                0x40,  # MB_ICONINFORMATION
+            )
+        return
     root = TkinterDnD.Tk() if DND_AVAILABLE else tk.Tk()
     App(root)
     root.mainloop()
