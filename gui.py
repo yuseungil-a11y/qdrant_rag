@@ -88,7 +88,7 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.0.10"
+APP_VERSION = "3.0.11"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
