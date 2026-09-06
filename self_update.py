@@ -64,6 +64,9 @@ def cleanup_stale_update_files() -> None:
         fail_log = app_dir.with_name(app_dir.name + "_update_failed.log")
         if fail_log.exists():
             fail_log.unlink(missing_ok=True)
+        breadcrumb = app_dir.with_name(app_dir.name + "_update_debug_로그위치.txt")
+        if breadcrumb.exists():
+            breadcrumb.unlink(missing_ok=True)
     except Exception:
         pass  # 정리 실패해도 앱 실행 자체를 막을 이유는 없음
 
@@ -171,6 +174,21 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
     # 기존 단일 exe 교체 때와 동일한 재시도 전략을 그대로 폴더 단위로 적용한다.
     bat_path = Path(tempfile.gettempdir()) / f"{app_dir.name}_update.bat"
     fail_log = app_dir.with_name(app_dir.name + "_update_failed.log")
+    # 원인 불명 실패가 반복 보고돼(2026-09-06, 여러 차례 수정에도 "_new"만 남고 교체가
+    # 안 되는 증상이 계속됨) 추측성 수정을 반복하는 대신, 각 단계를 타임스탬프와 함께
+    # 임시폴더의 로그 파일에 남긴다 - 다음에 실패하면 이 로그로 정확히 어느 단계에서
+    # 왜 막혔는지(예: move의 errorlevel) 바로 확인 가능하게 함. 매 실행마다 새로 씀.
+    debug_log = Path(tempfile.gettempdir()) / f"{app_dir.name}_update_debug.log"
+    # tempfile.gettempdir()는 표준 %TEMP%가 아니라, PC에 깔린 다른 유틸리티(예: 알집/반디집
+    # 등 TEMP 환경변수를 자기 폴더로 재지정하는 프로그램)에 의해 완전히 다른 경로를 가리킬
+    # 수 있다(2026-09-06, 개발 PC에서도 실제로 C:\Users\Public\Documents\ESTsoft\CreatorTemp로
+    # 재지정된 것을 확인함) - 사용자가 "TEMP 폴더"를 짐작해서 찾기 어려우므로, 실제 경로를
+    # 설치 폴더 바로 옆에 평문 텍스트로 남겨서 쉽게 찾을 수 있게 한다.
+    breadcrumb = app_dir.with_name(app_dir.name + "_update_debug_로그위치.txt")
+    try:
+        breadcrumb.write_text(f"디버그 로그 위치:\n{debug_log}\n", encoding="utf-8")
+    except Exception:
+        pass
     # 주의(2026-09-06, 실제 검증 중 발견): `timeout /t N`은 표준입력이 콘솔이어야 동작하는데,
     # 이 배치는 콘솔 창 없이(CREATE_NO_WINDOW) 백그라운드 프로세스로 뜨는 부모(윈도우 서브
     # 시스템 GUI exe, console=False)에서 실행되어 콘솔 입력이 없다 - 그 상태에서 `timeout`은
@@ -184,6 +202,7 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         "@echo off\r\n"
         "chcp 65001 > nul\r\n"
         "setlocal enabledelayedexpansion\r\n"
+        f'echo [%date% %time%] update.bat started, cwd=%cd% > "{debug_log}"\r\n'
         # 중요(2026-09-06, 실사용 중 재현/확정): 이 배치를 실행하는 cmd.exe가 "현재 작업
         # 디렉터리"로 설치 폴더 자신을 물려받으면(더블클릭으로 실행된 GUI exe의 기본
         # 작업 디렉터리가 자기 exe가 있는 폴더라 그대로 상속됨), Windows는 어떤 프로세스가
@@ -194,29 +213,37 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         # 작업 디렉터리를 옮겨서 이 문제를 원천 차단한다. subprocess.Popen(cwd=...)로도
         # 동일하게 옮기지만, 이 배치 파일이 다른 경로로 실행되는 경우까지 대비해 이중으로 둠.
         f'cd /d "{tempfile.gettempdir()}"\r\n'
+        f'echo [%date% %time%] cwd moved to temp, now=%cd% >> "{debug_log}"\r\n'
         # 자연 종료(root.destroy() 이후 프로세스가 완전히 정리되기까지)를 그냥 기다리면
         # 수십 초까지 걸릴 수 있어(2026-09-06 실사용 보고 - 재현은 됐으나 정상적으로도
         # 20~30초가 걸림), 재시도에만 기대지 않고 시작하자마자 우리 자신의 exe를 강제
         # 종료해서 첫 시도에 곧바로 성공하게 한다. 이미 종료돼 있으면 taskkill이 그냥
         # 실패할 뿐 문제 없음(>nul 2>&1로 무시).
-        f'taskkill /f /im "{exe_name}" >nul 2>&1\r\n'
+        f'taskkill /f /im "{exe_name}" >> "{debug_log}" 2>&1\r\n'
+        f'echo [%date% %time%] taskkill errorlevel=!errorlevel! >> "{debug_log}"\r\n'
         f'if exist "{old_dir}" rmdir /s /q "{old_dir}" >nul 2>&1\r\n'
         f'if exist "{fail_log}" del /f /q "{fail_log}" >nul 2>&1\r\n'
         "set RETRIES=0\r\n"
         ":retry\r\n"
         f'move /y "{app_dir}" "{old_dir}" >nul 2>&1\r\n'
-        "if errorlevel 1 (\r\n"
+        "set MOVE1_ERR=!errorlevel!\r\n"
+        f'echo [%date% %time%] move app_dir-^>old_dir attempt !RETRIES! errorlevel=!MOVE1_ERR! >> "{debug_log}"\r\n'
+        "if !MOVE1_ERR! NEQ 0 (\r\n"
         "    set /a RETRIES+=1\r\n"
         "    if !RETRIES! GEQ 30 goto :giveup\r\n"
         "    ping -n 2 127.0.0.1 > nul\r\n"
         "    goto :retry\r\n"
         ")\r\n"
-        f'move /y "{new_dir}" "{app_dir}"\r\n'
+        f'echo [%date% %time%] move app_dir-^>old_dir SUCCEEDED after !RETRIES! retries >> "{debug_log}"\r\n'
+        f'move /y "{new_dir}" "{app_dir}" >> "{debug_log}" 2>&1\r\n'
+        f'echo [%date% %time%] move new_dir-^>app_dir errorlevel=!errorlevel! >> "{debug_log}"\r\n'
+        f'if exist "{app_dir}\\{exe_name}" (echo [%date% %time%] confirmed: %errorlevel% new exe exists at app_dir >> "{debug_log}") else (echo [%date% %time%] WARNING: exe NOT found at app_dir after move! >> "{debug_log}")\r\n'
         # 방금 막 새로 생긴(인터넷에서 받은) 폴더/파일들을 백신(Windows Defender 등)이
         # 실시간으로 스캔 중일 수 있어, 교체 직후 곧바로 실행하면 그 스캔과 겹쳐 오류가
         # 날 수 있다(2026-09-06 실사용 보고) - 스캔이 끝날 시간을 벌기 위해 실행 전 대기.
         "ping -n 3 127.0.0.1 > nul\r\n"
         f'start "" "{app_dir}\\{exe_name}"\r\n'
+        f'echo [%date% %time%] start issued for new exe >> "{debug_log}"\r\n'
         # {old_dir} 삭제도 방금 막 이름 바뀐 폴더라 백신 검사 등으로 아주 잠깐 잠길 수 있어
         # 재시도 없이 한 번만 시도하던 것을 최대 10초 재시도로 바꿈 - 그래도 실패하면
         # 기능상 문제는 없고(다음 실행 폴더는 이미 정상) 남은 폴더는 그냥 무시.
@@ -230,9 +257,11 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         "        goto :delretry\r\n"
         "    )\r\n"
         ")\r\n"
+        f'echo [%date% %time%] done, old_dir cleanup attempts=!DELRETRIES! >> "{debug_log}"\r\n'
         "goto :cleanup\r\n"
         ":giveup\r\n"
         f'echo update failed - {app_dir.name} was still in use after 30s > "{fail_log}"\r\n'
+        f'echo [%date% %time%] GIVEUP after 30 retries, restoring old_dir if present >> "{debug_log}"\r\n'
         f'if exist "{old_dir}" move /y "{old_dir}" "{app_dir}" >nul 2>&1\r\n'
         ":cleanup\r\n"
         'del "%~f0"\r\n'
