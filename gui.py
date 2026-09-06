@@ -88,7 +88,43 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.0.14"
+APP_VERSION = "3.1.0"
+
+# "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
+# 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
+# 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
+VERSION_HISTORY = [
+    ("3.1.0", "상단 메뉴바 추가 - 도움말 > 프로그램 소개/프로그램 이력 메뉴 신설"),
+    ("3.0.14", "Qdrant URL 설정칸에 진짜 플레이스홀더 UX 도입 (빈 값 + 회색 예시)"),
+    ("3.0.13", "키 상태 \"정상\" 오판 버그 수정 - 미설정 저장소도 오탐 없이 정확히 판정"),
+    ("3.0.12", "TaskGroup 예외 메시지가 실제 원인을 숨기던 문제 수정"),
+    ("3.0.11", "자기업데이트 타깃용 버전 게시 (코드 변경 없음)"),
+    ("3.0.10", "app.log 도입 + 실행 중 1분마다 자동 업데이트 재확인 기능 추가"),
+    ("3.0.9", "자기업데이트 자체 테스트용 버전 게시 (코드 변경 없음)"),
+    ("3.0.8", "자기업데이트 실패 원인 진단용 로깅 추가"),
+    ("3.0.7", "자기업데이트 테스트용 버전 게시 (코드 변경 없음)"),
+    ("3.0.6", "exe 중복 실행 방지 - 단일 인스턴스 잠금 추가"),
+    ("3.0.5", "자기업데이트 중복 클릭 시 프로세스 중복 실행되던 버그 수정"),
+    ("3.0.4", "자기업데이트 체감 대기시간 단축 (자기 프로세스 즉시 강제종료)"),
+    ("3.0.3", "자기업데이트 테스트용 버전 게시 (코드 변경 없음)"),
+    ("3.0.2", "자기업데이트 폴더 교체가 항상 실패하던 심각한 버그 수정 (CWD 잠금)"),
+    ("3.0.1", "자기업데이트가 config.json 등 사용자 파일을 삭제하던 문제 수정"),
+    ("3.0.0", "Windows 배포를 onefile에서 onedir로 전환 (실행 안정성 개선)"),
+    ("2.18.3", "자기업데이트 직후 재실행 시 실패하던 문제 완화"),
+    ("2.18.2", "청크 크기 조정(1500→1100자)으로 검색 품질 개선"),
+    ("2.18.1", "파이썬 미설치 PC에서 pywintypes 오류로 죽던 문제 수정"),
+    ("2.18.0", "파일 삭제/키워드 검색삭제를 체크박스 기반 단일 대상 방식으로 개편"),
+    ("2.17.3", "\"제안서 자료 저장소\" UI 표기를 \"전략기획실 자료저장소\"로 변경"),
+    ("2.17.2", "claude_desktop_config.json 저장이 일부 PC에서 반영 안 되던 문제 수정"),
+    ("2.12.0", "저장소 접근 분리 정책에 맞춰 삭제/검색 라우팅 수정"),
+    ("2.11.0", "세 번째 저장 대상 \"제안서 자료 저장소\" 추가"),
+    ("2.10.0", "시작 시 개인/공용 저장소 키 상태 자동 확인 기능 추가"),
+    ("2.9.x", "개인 저장소 파일 삭제 실패 버그 발견 및 수정"),
+    ("2.8.x", "위키 로그인 편집 기능 추가, 텍스트 등록 로그 멈춤 버그 수정"),
+    ("2.7.0", "설정 화면에서 개인/공용 Qdrant URL 편집 기능 추가"),
+    ("2.6.x", "등록 영역 UI 개선, 키워드 검색 결과 필터링 개선"),
+    ("2.5.x", "공용(팀 공유) 저장소 추가, 상태 표시줄 스피너 적용"),
+]
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -195,6 +231,15 @@ class App:
         root.title(f"Qdrant 문서 등록 v{APP_VERSION}")
         root.geometry("820x1000")
         root.minsize(650, 500)
+
+        # 상단 주 메뉴바(사용자 요청) - 지금은 "도움말 > 프로그램 소개" 하나뿐이지만,
+        # 앞으로 메뉴가 늘어날 걸 대비해 tk.Menu 구조로 둠.
+        menu_bar = tk.Menu(root)
+        help_menu = tk.Menu(menu_bar, tearoff=0)
+        help_menu.add_command(label="프로그램 소개", command=self._show_about_dialog)
+        help_menu.add_command(label="프로그램 이력", command=self._show_version_history_dialog)
+        menu_bar.add_cascade(label="도움말", menu=help_menu)
+        root.config(menu=menu_bar)
 
         # macOS의 일부 Tcl/Tk 빌드에서는 Entry/Text에 Command-c/v/x/a가
         # 기본 바인딩되어 있지 않아 붙여넣기가 먹지 않는 경우가 있어 명시적으로 등록
@@ -689,6 +734,56 @@ class App:
             return
         self.app_update_label.config(text="⬆ 업데이트 설치 실패 (클릭해서 재시도)", fg="#c0392b")
         self.log(f"[오류] 자동 업데이트 설치 실패: {error}")
+
+    def _show_about_dialog(self):
+        """상단 메뉴바 "도움말 > 프로그램 소개"(사용자 요청) - 이 프로그램이 뭘 하는
+        도구인지 간단히 설명. 별도 창을 새로 만들지 않고 표준 messagebox로 충분히
+        간단하게 처리."""
+        messagebox.showinfo(
+            "프로그램 소개",
+            f"유티정보 벡터 등록 프로그램 v{APP_VERSION}\n\n"
+            "문서를 Qdrant 벡터DB에 등록해서 AI가 내용을 검색하고 답변에\n"
+            "활용할 수 있게 해주는 사내 도구입니다.\n\n"
+            "주요 기능\n"
+            "• 파일/폴더 드래그 앤 드롭으로 문서 일괄 등록\n"
+            "  (PDF, Word, 한글, 엑셀, PPT, 이미지 등)\n"
+            "• 개인 / 공용 / 전략기획실 세 저장소에 독립적으로\n"
+            "  등록·검색·삭제\n"
+            "• 텍스트 붙여넣기로 바로 등록\n"
+            "• MediaWiki 문서·사이트 자동 업로드\n"
+            "• 프로그램 자기 자신 자동 업데이트\n\n"
+            "설정(오른쪽 위 \"설정...\" 버튼)에서 저장소 주소, 위키 계정,\n"
+            "MCP 연동 정보를 관리할 수 있습니다.\n\n"
+            "© 2026 유티정보(주). All rights reserved.",
+            parent=self.root,
+        )
+
+    def _show_version_history_dialog(self):
+        """상단 메뉴바 "도움말 > 프로그램 이력"(사용자 요청: "프로그램 소개 아래 팝업
+        '프로그램 이력' 만들고, 각 버전별 내용 계속 기록해") - VERSION_HISTORY 목록을
+        스크롤 가능한 읽기 전용 텍스트로 보여준다. 새 버전을 낼 때마다 VERSION_HISTORY
+        맨 위에 한 줄 요약을 추가해나가는 걸 전제로 함(자세한 원인/수정 내용은
+        CHANGELOG.md 참고)."""
+        win = tk.Toplevel(self.root)
+        win.title("프로그램 이력")
+        win.geometry("560x480")
+        win.transient(self.root)
+
+        text_frame = tk.Frame(win)
+        text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side="right", fill="y")
+        text = tk.Text(text_frame, wrap="word", yscrollcommand=scrollbar.set, font=(KOREAN_FONT, 10))
+        text.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=text.yview)
+
+        for version, summary in VERSION_HISTORY:
+            text.insert("end", f"v{version}", ("version",))
+            text.insert("end", f" - {summary}\n\n")
+        text.tag_config("version", font=(KOREAN_FONT, 10, "bold"))
+        text.config(state="disabled")  # 읽기 전용 - 사용자가 실수로 내용을 고칠 일 없게
+
+        tk.Button(win, text="닫기", command=win.destroy).pack(pady=(0, 10))
 
     def open_settings_dialog(self, initial_tab: int | None = None):
         """개인/공용/제안서 자료 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를
