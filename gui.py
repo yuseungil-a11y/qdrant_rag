@@ -38,7 +38,7 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "3.0.4"
+APP_VERSION = "3.0.5"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -547,6 +547,11 @@ class App:
             "계속하시겠습니까?",
         ):
             return
+        # 주의(2026-09-06, 실사용 중 발견): self.busy를 여기서 True로 세우지 않으면, 다운로드
+        # 중(수 초~수십 초) 라벨을 다시 클릭했을 때 위 self.busy 체크가 통과해버려 두 번째
+        # 업데이트 스레드가 동시에 시작될 수 있었다 - 각자 같은 "_new" 폴더에 압축을 풀고
+        # 각자 배치 스크립트를 띄워 exe가 두 번 실행되는(프로세스 중복 실행) 사고로 이어짐.
+        self.busy = True
         self._start_app_update_blink(False)
         self.app_update_label.config(text="다운로드 중...", fg="#888888")
         threading.Thread(target=self._run_app_update_install, daemon=True).start()
@@ -562,6 +567,7 @@ class App:
         self.root.after(0, self.root.destroy)
 
     def _show_app_update_install_result(self, success: bool, error: str):
+        self.busy = False
         if success:
             return
         self.app_update_label.config(text="⬆ 업데이트 설치 실패 (클릭해서 재시도)", fg="#c0392b")
