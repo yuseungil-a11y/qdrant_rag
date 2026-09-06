@@ -197,8 +197,14 @@ def check_key_status(mcp_url: str, timeout: float = 5.0) -> dict:
     - ok=True: 키가 유효함 (reason은 None)
     - ok=False: 키가 없거나(REPLACE_ME 기본값) / 서버가 401을 반환했거나(reason에 서버가 준
       사유) / 네트워크 자체가 안 됐음(reason에 예외 메시지)"""
-    if not mcp_url or "REPLACE_ME" in mcp_url:
-        return {"ok": False, "reason": "URL이 설정되지 않았습니다 (설정에서 mcp_url을 입력하세요)"}
+    # "REPLACE_ME"만 걸러내고 도메인(example.com)은 그대로 두면, 키 부분만 실제 값으로
+    # 바꾸고 도메인은 플레이스홀더 그대로인 실수를 못 잡는다 - example.com은 실제로 존재하는
+    # 도메인이라 GET 요청에 200/404 등(401이 아닌 응답)을 반환해서 "정상"으로 오판된다
+    # (2026-09-06 실사용 보고: 개인/공용/전략기획실 키가 전부 "✓ 정상"으로 떴는데 실제
+    # 등록 시도하면 example.com에서 405 Method Not Allowed로 실패 - 상단 표시와 실제 동작이
+    # 모순된다는 사용자 지적으로 발견). DEFAULT_CONFIG의 플레이스홀더 도메인도 함께 걸러낸다.
+    if not mcp_url or "REPLACE_ME" in mcp_url or "example.com" in mcp_url:
+        return {"ok": False, "reason": "URL이 설정되지 않았습니다 (설정에서 실제 서버 주소를 입력하세요)"}
     try:
         resp = requests.get(mcp_url, timeout=timeout)
     except Exception as e:
@@ -833,20 +839,35 @@ _STORE_TOOL_INFO = {
 }
 
 
+def _is_placeholder_url(url: str) -> bool:
+    """config.json의 mcp_url*이 DEFAULT_CONFIG 플레이스홀더("https://example.com/mcp?key=
+    REPLACE_ME")에서 도메인은 그대로 두고 키 부분만 실제 값으로 바꾼 채 남아있는 실수를
+    잡는다(2026-09-06 실사용 보고 - check_key_status는 이미 이렇게 고쳤는데, 실제 등록
+    시도 시에도 똑같이 막아서 405 Method Not Allowed 같은 알아보기 힘든 에러 대신 여기서
+    바로 명확한 안내를 준다)."""
+    return not url or "REPLACE_ME" in url or "example.com" in url
+
+
 def resolve_store_targets(personal: bool, shared: bool, proposal: bool = False) -> list[StoreTarget]:
     """체크박스 상태(개인/공용/제안서 자료)에 따라 실제로 저장을 수행할 대상 목록을 만든다.
     여러 개가 켜져 있으면 전부 포함(파일당 그만큼 여러 곳에 저장), 다 꺼져 있으면 빈 목록."""
     targets: list[StoreTarget] = []
     if personal:
-        targets.append(("qdrant_store_mine", MCP_URL))
+        if _is_placeholder_url(MCP_URL):
+            print("[오류] config.json의 개인 저장소 URL(mcp_url)이 아직 설정되지 않았습니다 "
+                  "(설정 화면에서 실제 서버 주소를 입력하세요) - 개인 저장소 등록을 건너뜁니다.")
+        else:
+            targets.append(("qdrant_store_mine", MCP_URL))
     if shared:
-        if not MCP_URL_SHARED:
-            print("[안내] config.json에 mcp_url_shared가 설정되지 않아 공용 저장소 등록을 건너뜁니다.")
+        if _is_placeholder_url(MCP_URL_SHARED):
+            print("[오류] config.json의 공용 저장소 URL(mcp_url_shared)이 아직 설정되지 않았습니다 "
+                  "(설정 화면에서 실제 서버 주소를 입력하세요) - 공용 저장소 등록을 건너뜁니다.")
         else:
             targets.append(("qdrant-store", MCP_URL_SHARED))
     if proposal:
-        if not MCP_URL_PROPOSAL:
-            print("[안내] config.json에 mcp_url_proposal이 설정되지 않아 제안서 자료 저장소 등록을 건너뜁니다.")
+        if _is_placeholder_url(MCP_URL_PROPOSAL):
+            print("[오류] config.json의 전략기획실 저장소 URL(mcp_url_proposal)이 아직 설정되지 않았습니다 "
+                  "(설정 화면에서 실제 서버 주소를 입력하세요) - 전략기획실 저장소 등록을 건너뜁니다.")
         else:
             targets.append(("qdrant_store_proposal", MCP_URL_PROPOSAL))
     return targets
