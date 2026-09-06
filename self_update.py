@@ -24,6 +24,7 @@ mcp_config_helper.py의 MediaWiki MCP 서버 업데이트와 같은 방식(이 g
 땐 git pull로 업데이트하면 되므로).
 """
 import hashlib
+import logging
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,12 @@ import zipfile
 from pathlib import Path
 
 import requests
+
+# gui.py가 루트 로거에 파일 핸들러(설치 폴더의 app.log)를 달아두므로, 여기서는 그냥
+# 이름만 있는 로거를 가져다 쓰면 자동으로 같은 파일에 남는다(2026-09-06, "_new 폴더만
+# 생기고 교체 안 됨" 실패가 반복 보고돼 배치 스크립트가 뜨기도 전에 실패하는 경우까지
+# 잡으려고 추가).
+log = logging.getLogger(__name__)
 
 APP_MANIFEST_URL = "https://raw.githubusercontent.com/yuseungil-a11y/qdrant_rag/main/releases/manifest.json"
 RAW_BASE_URL = "https://raw.githubusercontent.com/yuseungil-a11y/qdrant_rag/main/"
@@ -119,19 +126,23 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         raise RuntimeError("자기 업데이트는 Windows exe 실행 시에만 지원됩니다.")
 
     url = RAW_BASE_URL + manifest_entry["path"]
+    log.info("다운로드 시작: %s", url)
     resp = requests.get(url, timeout=180)
     resp.raise_for_status()
     data = resp.content
+    log.info("다운로드 완료: %d bytes", len(data))
 
     expected_hash = manifest_entry.get("sha256")
     actual_hash = hashlib.sha256(data).hexdigest()
     if expected_hash and actual_hash != expected_hash:
         raise RuntimeError("다운로드한 파일의 해시가 일치하지 않습니다 (받은 파일이 손상되었을 수 있음)")
+    log.info("해시 검증 통과: %s", actual_hash)
 
     app_dir = _app_dir()
     exe_name = Path(sys.executable).name
     new_dir = app_dir.with_name(app_dir.name + "_new")
     old_dir = app_dir.with_name(app_dir.name + "_old")
+    log.info("app_dir=%s new_dir=%s old_dir=%s tempdir=%s", app_dir, new_dir, old_dir, tempfile.gettempdir())
     if new_dir.exists():
         shutil.rmtree(new_dir, ignore_errors=True)
 
@@ -140,6 +151,7 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(new_dir)
     zip_path.unlink(missing_ok=True)
+    log.info("압축 해제 완료: %s", new_dir)
 
     if not (new_dir / exe_name).exists():
         shutil.rmtree(new_dir, ignore_errors=True)
@@ -267,6 +279,7 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         'del "%~f0"\r\n'
     )
     bat_path.write_text(bat_content, encoding="utf-8")
+    log.info("배치 스크립트 작성 완료: %s (디버그 로그: %s)", bat_path, debug_log)
 
     subprocess.Popen(
         ["cmd", "/c", str(bat_path)],
@@ -274,3 +287,4 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
         close_fds=True,
         cwd=tempfile.gettempdir(),
     )
+    log.info("배치 스크립트 프로세스 실행 요청 완료")

@@ -38,7 +38,57 @@ import register
 import self_update
 import wiki_upload
 
-APP_VERSION = "3.0.9"
+# 자기업데이트 실패 원인을 추적하려고 처음엔 %TEMP% 기준 배치 스크립트 로그만 뒀는데,
+# tempfile.gettempdir()가 PC마다 다른 곳(알집/반디집 등이 재지정한 폴더)을 가리킬 수 있어
+# 사용자가 못 찾는 경우가 반복됐고, 심지어 파이썬 코드 쪽에서 배치 스크립트가 뜨기도 전에
+# 실패하면 그 로그조차 안 남는 문제가 있었다(2026-09-06). 그래서 항상 같은 위치 -
+# 설치 폴더 안(register.SCRIPT_DIR, config.json과 같은 자리) - 에 애플리케이션 로그를
+# 남기도록 함. 여기엔 시작 정보, 자기업데이트 확인/설치 각 단계, 그리고 원래는 콘솔이
+# 없어(sys.stderr가 devnull) 조용히 사라지던 예외들까지 잡아서 기록한다.
+import datetime as _dt
+import logging as _logging
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+
+
+def _prune_old_app_log(log_path: Path, max_age_days: int = 7) -> None:
+    """실행할 때마다 로그 파일에서 max_age_days(기본 1주일)보다 오래된 줄은 지운다
+    (사용자 요청: "log는 프로그램 실행할때 검사해서 1주일이전 로그는 자동 삭제해").
+    RotatingFileHandler의 크기 기반 회전(2MB)과는 별개로 날짜 기준 정리를 추가한 것 -
+    사용량이 적어 2MB를 채 못 채우는 경우에도 오래된 기록이 무한정 쌓이지 않게 함.
+    각 줄은 "YYYY-MM-DD HH:MM:SS,fff [LEVEL] ..." 형식으로 시작하는데(아래 Formatter
+    참고), 트레이스백처럼 타임스탬프 없이 이어지는 줄은 직전 줄의 판정을 그대로 따른다."""
+    if not log_path.exists():
+        return
+    try:
+        cutoff = _dt.datetime.now() - _dt.timedelta(days=max_age_days)
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
+        kept = []
+        keep_current_block = True
+        for line in lines:
+            try:
+                ts = _dt.datetime.strptime(line[:23], "%Y-%m-%d %H:%M:%S,%f")
+                keep_current_block = ts >= cutoff
+            except ValueError:
+                pass  # 타임스탬프 없는 후속 줄(트레이스백 등) - 직전 판정을 그대로 이어감
+            if keep_current_block:
+                kept.append(line)
+        log_path.write_text("".join(kept), encoding="utf-8")
+    except Exception:
+        pass  # 정리 실패해도 앱 실행 자체를 막을 이유는 아님
+
+
+_log_path = register.SCRIPT_DIR / "app.log"
+_prune_old_app_log(_log_path)
+try:
+    _log_handler = _RotatingFileHandler(_log_path, maxBytes=2_000_000, backupCount=2, encoding="utf-8")
+    _log_handler.setFormatter(_logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    _logging.getLogger().addHandler(_log_handler)
+    _logging.getLogger().setLevel(_logging.INFO)
+except Exception:
+    pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
+app_logger = _logging.getLogger("gui")
+
+APP_VERSION = "3.0.10"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -499,19 +549,39 @@ class App:
                 0, lambda: status_widget.config(text=f"{label}키: ✗ {reason}", fg="#c0392b"),
             )
 
+    _APP_UPDATE_POLL_INTERVAL_MS = 60_000  # 실행 중에도 1분마다 새 버전 여부를 다시 확인(사용자 요청)
+
     def _check_app_update_on_startup(self):
         """프로그램 시작 시 한 번, qdrant_register_gui.exe 자신의 새 버전이 있는지 확인한다
         (명시적 사용자 요청: "업데이트 확인 버튼을 메인UI에 표기하고 실행할때 자동으로
         버전체크해서 버전이 다르면 애니메이션으로 표기해줘" - qdrant_register_gui.exe 대상
         임을 명시적으로 재확인함). Windows exe로 실행 중이 아니면(소스 실행/다른 OS)
-        self_update.check_for_app_update()가 ok=False를 주므로 조용히 아무것도 표시 안 함."""
-        result = self_update.check_for_app_update(APP_VERSION)
+        self_update.check_for_app_update()가 ok=False를 주므로 조용히 아무것도 표시 안 함.
+
+        이후로도 실행 중에 1분마다 계속 다시 확인한다(사용자 요청: "실행중에도 1분에
+        한번씩 버전체크 가능하도록") - 프로그램을 오래 켜둔 채로 있어도 그 사이 새로
+        게시된 버전을 곧바로 감지할 수 있게 함. 업데이트 설치가 진행 중일 때는 건너뛴다."""
+        try:
+            result = self_update.check_for_app_update(APP_VERSION)
+        except Exception:
+            app_logger.exception("주기적 업데이트 확인 중 예외 발생")
+            result = {"ok": False, "update_available": False, "message": "확인 실패", "manifest_entry": None}
         self.root.after(0, lambda: self._show_app_update_indicator(result))
+        self.root.after(self._APP_UPDATE_POLL_INTERVAL_MS, self._schedule_next_app_update_check)
+
+    def _schedule_next_app_update_check(self):
+        if self.busy:
+            # 업데이트 설치 등 다른 작업이 진행 중이면 이번 틱은 건너뛰고 다음 주기에 재시도
+            self.root.after(self._APP_UPDATE_POLL_INTERVAL_MS, self._schedule_next_app_update_check)
+            return
+        threading.Thread(target=self._check_app_update_on_startup, daemon=True).start()
 
     def _show_app_update_indicator(self, result: dict):
         self._app_update_manifest_entry = result.get("manifest_entry")
         if not result["ok"]:
+            app_logger.info("업데이트 확인: 대상 아님/실패 - %s", result.get("message"))
             return  # 대상이 아니거나(다른 OS/소스 실행) 확인 실패 - 메인 화면은 조용히 넘어감
+        app_logger.info("업데이트 확인: %s (현재 v%s)", result.get("message"), APP_VERSION)
         if result["update_available"]:
             self.app_update_label.config(text=f"⬆ 새 버전 있음 (v{result['latest_version']}, 클릭해서 업데이트)")
             self._start_app_update_blink(True)
@@ -557,11 +627,17 @@ class App:
         threading.Thread(target=self._run_app_update_install, daemon=True).start()
 
     def _run_app_update_install(self):
+        app_logger.info("자기업데이트 설치 시작: manifest_entry=%s", self._app_update_manifest_entry)
         try:
             self_update.download_and_apply_app_update(self._app_update_manifest_entry)
         except Exception as e:
+            # app_logger.exception()으로 전체 트레이스백까지 app.log에 남긴다 - 원래는
+            # console=False라 sys.stderr가 devnull로 가서 조용히 사라졌을 예외까지 잡음
+            # (2026-09-06, 배치 스크립트 로그조차 안 남는 실사용 사례가 반복 보고돼 추가).
+            app_logger.exception("자기업데이트 설치 실패(다운로드/압축해제/배치 준비 단계)")
             self.root.after(0, lambda: self._show_app_update_install_result(False, str(e)))
             return
+        app_logger.info("배치 스크립트 실행됨 - 이 프로세스는 곧 종료됨(정상)")
         # 배치 스크립트가 파일 교체+재실행을 맡고, 이 프로세스는 스스로 종료해야 파일 잠금이
         # 풀려서 배치 스크립트가 진행될 수 있다.
         self.root.after(0, self.root.destroy)
@@ -1448,7 +1524,12 @@ def _acquire_single_instance_lock() -> bool:
 
 
 def main():
+    app_logger.info(
+        "==== 시작: v%s, platform=%s, frozen=%s, exe=%s ====",
+        APP_VERSION, sys.platform, getattr(sys, "frozen", False), sys.executable,
+    )
     if not _acquire_single_instance_lock():
+        app_logger.info("이미 다른 인스턴스가 실행 중 - 안내 후 종료")
         if sys.platform == "win32":
             import ctypes
             ctypes.windll.user32.MessageBoxW(
@@ -1459,8 +1540,16 @@ def main():
             )
         return
     root = TkinterDnD.Tk() if DND_AVAILABLE else tk.Tk()
+    # Tkinter는 버튼 클릭 등 이벤트 콜백에서 발생한 예외를 기본적으로 그냥 stderr에 찍고
+    # 넘어가는데, 이 앱은 console=False라 sys.stderr가 devnull이라 그 예외가 완전히
+    # 조용히 사라진다 - app.log에는 남도록 재정의(2026-09-06, 원인 불명 실패가 반복
+    # 보고돼 이런 "조용히 사라지는" 경로들을 최대한 없애기 위해 추가).
+    root.report_callback_exception = lambda exc, val, tb: app_logger.error(
+        "Tkinter 콜백에서 예외 발생", exc_info=(exc, val, tb)
+    )
     App(root)
     root.mainloop()
+    app_logger.info("==== 정상 종료 ====")
 
 
 if __name__ == "__main__":
