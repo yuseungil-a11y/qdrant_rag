@@ -5,6 +5,16 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 3.0.12
+
+- **버그 수정**: mcp 클라이언트(anyio/asyncio TaskGroup 기반)가 내부에서 실패하면
+  실제 원인이 `ExceptionGroup`에 감싸인 채로 올라오는데, 화면/로그에는 그냥
+  "unhandled errors in a TaskGroup (1 sub-exception)"처럼 실제 원인이 안 보이는
+  메시지만 남아 원인 파악이 안 되던 문제 수정(실사용 보고 - 엑셀 파일 업로드 중
+  이 메시지만 남고 무엇이 실패했는지 알 수 없었음). `describe_exception()` 헬퍼를
+  추가해 `ExceptionGroup`을 재귀적으로 풀어 실제 하위 예외 메시지까지 이어붙여
+  표시하도록 register.py의 저장 재시도 로직과 gui.py의 모든 오류 로그 지점에 적용.
+
 ## 3.0.11
 
 - 코드 변경 없음 - v3.0.10의 자기업데이트(폴더 통째 교체) + 실행 중 1분마다 자동

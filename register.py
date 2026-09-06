@@ -134,6 +134,18 @@ DEFAULT_CONFIG = {
 MAX_BASE64_IMAGE_BYTES = 5 * 1024 * 1024  # 이보다 큰 이미지는 용량 문제로 base64 저장 생략
 
 
+def describe_exception(exc: BaseException) -> str:
+    """mcp 클라이언트(anyio/asyncio TaskGroup 기반)가 내부에서 실패하면 진짜 원인이
+    ExceptionGroup에 감싸인 채로 올라오는데, str()을 그대로 찍으면 "unhandled errors
+    in a TaskGroup (1 sub-exception)"처럼 실제 원인이 안 보이는 메시지만 나온다
+    (2026-09-06 실사용 보고 - 엑셀 업로드 중 오류 메시지가 이 형태로만 남아 원인 파악이
+    안 됐음). ExceptionGroup을 재귀적으로 풀어서 실제 하위 예외 메시지까지 이어붙인다."""
+    if isinstance(exc, BaseExceptionGroup):
+        inner = " | ".join(describe_exception(e) for e in exc.exceptions)
+        return f"{exc} -> {inner}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def parse_yn(value, default: bool = True) -> bool:
     if isinstance(value, bool):
         return value
@@ -856,7 +868,7 @@ async def _call_store_with_retry(session: ClientSession, store_tool: str, info: 
         try:
             result = await session.call_tool(store_tool, {"information": info, "metadata": metadata})
         except Exception as e:
-            message = str(e)
+            message = describe_exception(e)
         else:
             if not getattr(result, "isError", False):
                 return True

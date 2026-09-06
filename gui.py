@@ -88,7 +88,7 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.0.11"
+APP_VERSION = "3.0.12"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -1120,7 +1120,7 @@ class App:
                 )
             )
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -1186,7 +1186,7 @@ class App:
             self.root.after(0, lambda: self.paste_text.delete("1.0", "end"))
             self.root.after(0, lambda: self.paste_title_entry.delete(0, "end"))
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -1237,7 +1237,7 @@ class App:
             else:
                 asyncio.run(register.delete_proposal_by_source(source))
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -1275,7 +1275,7 @@ class App:
             self.search_target = target
             self.root.after(0, lambda: self.populate_search_results(results))
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -1337,7 +1337,7 @@ class App:
             self.root.after(0, lambda: self.search_listbox.delete(0, "end"))
             self.search_results = []
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -1460,7 +1460,7 @@ class App:
                 paths, category, progress_callback=self.progress_queue.put, upload_attachment=upload_attachment
             )
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
@@ -1494,7 +1494,7 @@ class App:
         try:
             wiki_upload.upload_sites_to_wiki(text, category, progress_callback=self.progress_queue.put)
         except Exception as e:
-            self.log(f"[오류] {e}")
+            self.log(f"[오류] {register.describe_exception(e)}")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
