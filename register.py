@@ -117,10 +117,21 @@ else:
     SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 
+# 설정 화면 입력칸에 회색 예시로만 보여주는 샘플 URL(실제 값으로 저장되지 않음) - gui.py의
+# Qdrant 저장소 탭에서 쓴다. 도메인은 사내 실제 도메인(pms.utinfo.co.kr)을 써서 형식이 더
+# 와닿게 하고(2026-09-06 사용자 요청), key= 뒤는 "발급키 입력"이라는 한글 문구로 "여기를
+# 실제 키로 통째로 바꿔야 한다"는 게 명확히 보이게 함. 이전엔 이 예시 URL 자체를
+# DEFAULT_CONFIG 기본값으로 넣어뒀었는데, 그러면 사용자가 아무것도 안 바꾸고 저장해도
+# "값이 있다"고 통과돼버려(빈 값 검사만으로는 못 잡음) - example.com처럼 실제 존재하는
+# 도메인을 예시로 쓰면 심지어 "키 인증 정상"으로까지 오판되는 사고로 이어졌다(실사용 보고).
+# 화면에는 플레이스홀더로만 보여주고 config.json의 실제 기본값은 빈 문자열로 둬서, 미설정
+# 상태를 빈 값 검사 하나로 확실하게 판정할 수 있게 함.
+SAMPLE_MCP_URL = "https://pms.utinfo.co.kr/mcp?key=발급키 입력"
+
 DEFAULT_CONFIG = {
     # 실제 서버 주소/키는 이 소스에 넣지 말고 config.json에서만 관리 (config.json은 git 추적 제외)
-    "mcp_url": "https://example.com/mcp?key=REPLACE_ME",  # 개인 저장소
-    "mcp_url_shared": "https://example.com/mcp?key=REPLACE_ME",  # 공용(팀 공유) 저장소 - 개인과 별도 서버/키
+    "mcp_url": "",  # 개인 저장소 - 설정 화면에는 SAMPLE_MCP_URL이 예시로만 보임
+    "mcp_url_shared": "",  # 공용(팀 공유) 저장소 - 개인과 별도 서버/키, 비워두면 등록 시 건너뜀
     "mcp_url_proposal": "",  # 제안서 자료 공용 저장소(proposal_data) - 비워두면 등록 시 건너뜀
     "ollama_url": "http://localhost:11434/api/generate",
     "vision_model": "moondream",  # GPU 있으면 llava, qwen2.5vl 등으로 교체 가능
@@ -195,14 +206,15 @@ def check_key_status(mcp_url: str, timeout: float = 5.0) -> dict:
 
     반환: {"ok": bool, "reason": str|None}
     - ok=True: 키가 유효함 (reason은 None)
-    - ok=False: 키가 없거나(REPLACE_ME 기본값) / 서버가 401을 반환했거나(reason에 서버가 준
-      사유) / 네트워크 자체가 안 됐음(reason에 예외 메시지)"""
-    # "REPLACE_ME"만 걸러내고 도메인(example.com)은 그대로 두면, 키 부분만 실제 값으로
-    # 바꾸고 도메인은 플레이스홀더 그대로인 실수를 못 잡는다 - example.com은 실제로 존재하는
-    # 도메인이라 GET 요청에 200/404 등(401이 아닌 응답)을 반환해서 "정상"으로 오판된다
-    # (2026-09-06 실사용 보고: 개인/공용/전략기획실 키가 전부 "✓ 정상"으로 떴는데 실제
-    # 등록 시도하면 example.com에서 405 Method Not Allowed로 실패 - 상단 표시와 실제 동작이
-    # 모순된다는 사용자 지적으로 발견). DEFAULT_CONFIG의 플레이스홀더 도메인도 함께 걸러낸다.
+    - ok=False: URL이 비어있거나(또는 옛날 플레이스홀더가 남아있거나) / 서버가 401을
+      반환했거나(reason에 서버가 준 사유) / 네트워크 자체가 안 됐음(reason에 예외 메시지)"""
+    # 2026-09-06부터 DEFAULT_CONFIG의 미설정 기본값이 빈 문자열로 바뀌어(설정 화면엔
+    # register.SAMPLE_MCP_URL을 예시로만 플레이스홀더 표시) 새로 생성되는 config.json은
+    # 빈 값 검사만으로 충분하다. 다만 이 변경 이전에 이미 생성된 config.json은 여전히
+    # "https://example.com/mcp?key=REPLACE_ME"이거나, 거기서 키 부분만 실제 값으로 바꾸고
+    # 도메인은 그대로 둔 채 저장된 경우(example.com은 실제 존재하는 도메인이라 GET에
+    # 401이 아닌 응답을 반환해 "정상"으로 오판되는 사고로 이어졌음 - 실사용 보고로 발견)가
+    # 남아있을 수 있어 하위 호환으로 계속 걸러낸다.
     if not mcp_url or "REPLACE_ME" in mcp_url or "example.com" in mcp_url:
         return {"ok": False, "reason": "URL이 설정되지 않았습니다 (설정에서 실제 서버 주소를 입력하세요)"}
     try:

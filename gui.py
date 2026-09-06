@@ -88,7 +88,7 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.0.13"
+APP_VERSION = "3.0.14"
 
 # OS별 한글 표시가 자연스러운 기본 폰트 (없는 폰트를 지정해도 tkinter가 조용히
 # 시스템 기본 폰트로 대체하긴 하지만, 지정 가능한 경우 더 자연스럽게 보이도록)
@@ -146,6 +146,47 @@ def parse_drop_paths(data: str) -> list[Path]:
     if buf:
         paths.append(buf)
     return [Path(p) for p in paths if p]
+
+
+_PLACEHOLDER_FG = "#999999"
+_ENTRY_NORMAL_FG = "black"
+
+
+def _bind_entry_placeholder(entry: tk.Entry, placeholder: str) -> None:
+    """Tkinter Entry는 HTML input의 placeholder 속성이 없어 직접 흉내낸다 - 비어있으면
+    회색 예시 텍스트를 채워두고, 포커스를 얻으면 지우고, 아무것도 안 쓴 채 포커스를
+    잃으면 다시 예시로 되돌린다. 예시가 표시된 상태인지는 entry._is_placeholder로
+    표시해두고, 실제 값을 읽을 땐 반드시 _entry_real_value()를 통해서 읽어야
+    플레이스홀더 텍스트가 실수로 저장되지 않는다(2026-09-06 사용자 요청 - 예전엔
+    예시 URL을 입력칸 기본값으로 직접 채워둬서, 사용자가 key= 부분만 바꾸고 도메인은
+    예시 그대로 저장하는 실수로 이어졌음)."""
+    entry._is_placeholder = not entry.get()
+    if entry._is_placeholder:
+        entry.insert(0, placeholder)
+        entry.config(fg=_PLACEHOLDER_FG)
+
+    def on_focus_in(_event):
+        if entry._is_placeholder:
+            entry.delete(0, "end")
+            entry.config(fg=_ENTRY_NORMAL_FG)
+            entry._is_placeholder = False
+
+    def on_focus_out(_event):
+        if not entry.get():
+            entry.insert(0, placeholder)
+            entry.config(fg=_PLACEHOLDER_FG)
+            entry._is_placeholder = True
+
+    entry.bind("<FocusIn>", on_focus_in)
+    entry.bind("<FocusOut>", on_focus_out)
+
+
+def _entry_real_value(entry: tk.Entry) -> str:
+    """플레이스홀더가 표시 중이면(사용자가 실제로 입력한 적 없으면) 빈 문자열로,
+    아니면 실제 입력값을 반환한다."""
+    if getattr(entry, "_is_placeholder", False):
+        return ""
+    return entry.get().strip()
 
 
 class App:
@@ -672,6 +713,7 @@ class App:
         personal_entry = tk.Entry(qdrant_tab)
         personal_entry.insert(0, register.CONFIG.get("mcp_url", ""))
         personal_entry.pack(fill="x", padx=10, pady=(2, 10))
+        _bind_entry_placeholder(personal_entry, register.SAMPLE_MCP_URL)
 
         tk.Label(
             qdrant_tab, text="공용 저장소 URL (mcp_url_shared):", anchor="w", font=(KOREAN_FONT, 10),
@@ -679,6 +721,7 @@ class App:
         shared_entry = tk.Entry(qdrant_tab)
         shared_entry.insert(0, register.CONFIG.get("mcp_url_shared", ""))
         shared_entry.pack(fill="x", padx=10, pady=(2, 10))
+        _bind_entry_placeholder(shared_entry, register.SAMPLE_MCP_URL)
 
         tk.Label(
             qdrant_tab, text="전략기획실 자료저장소 URL (mcp_url_proposal):", anchor="w", font=(KOREAN_FONT, 10),
@@ -686,11 +729,14 @@ class App:
         proposal_entry = tk.Entry(qdrant_tab)
         proposal_entry.insert(0, register.CONFIG.get("mcp_url_proposal", ""))
         proposal_entry.pack(fill="x", padx=10, pady=(2, 10))
+        _bind_entry_placeholder(proposal_entry, register.SAMPLE_MCP_URL)
 
         def save_qdrant_urls():
-            personal = personal_entry.get().strip()
-            shared = shared_entry.get().strip()
-            proposal = proposal_entry.get().strip()
+            # 플레이스홀더가 표시된 상태(사용자가 실제로 입력한 적 없음)면 빈 문자열로
+            # 취급해야 예시 텍스트가 실수로 저장되지 않는다(2026-09-06 사용자 요청).
+            personal = _entry_real_value(personal_entry)
+            shared = _entry_real_value(shared_entry)
+            proposal = _entry_real_value(proposal_entry)
             if not personal:
                 messagebox.showwarning("입력 필요", "개인 저장소 URL은 비워둘 수 없습니다.", parent=win)
                 return
