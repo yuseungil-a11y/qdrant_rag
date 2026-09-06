@@ -88,12 +88,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.1.1"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.1.1", "설정 화면에 위키 사이트 주소(wiki_site_url) 입력칸 추가 - 기존엔 없었음"),
     ("3.1.0", "상단 메뉴바 추가 - 도움말 > 프로그램 소개/프로그램 이력 메뉴 신설"),
     ("3.0.14", "Qdrant URL 설정칸에 진짜 플레이스홀더 UX 도입 (빈 값 + 회색 예시)"),
     ("3.0.13", "키 상태 \"정상\" 오판 버그 수정 - 미설정 저장소도 오탐 없이 정확히 판정"),
@@ -854,9 +855,26 @@ class App:
 
         wiki_cfg = wiki_upload.get_wiki_config()
 
+        # 실사용 보고(2026-09-06): 위키 사이트 주소(wiki_site_url)를 바꿀 입력칸이 이 화면에
+        # 아예 없었음 - 계정/비밀번호만 있고 주소는 config.json을 직접 열어야만 고칠 수
+        # 있었음. wiki_path까지 함께 추가.
+        tk.Label(
+            wiki_tab, text="위키 사이트 주소 (wiki_site_url):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(12, 0))
+        wiki_site_entry = tk.Entry(wiki_tab)
+        wiki_site_entry.insert(0, wiki_cfg.get("wiki_site_url", ""))
+        wiki_site_entry.pack(fill="x", padx=10, pady=(2, 10))
+
+        tk.Label(
+            wiki_tab, text="위키 경로 (wiki_path, 보통 그대로 두면 됨):", anchor="w", font=(KOREAN_FONT, 10),
+        ).pack(fill="x", padx=10, pady=(0, 0))
+        wiki_path_entry = tk.Entry(wiki_tab)
+        wiki_path_entry.insert(0, wiki_cfg.get("wiki_path", ""))
+        wiki_path_entry.pack(fill="x", padx=10, pady=(2, 10))
+
         tk.Label(
             wiki_tab, text="위키 로그인 계정 (wiki_username):", anchor="w", font=(KOREAN_FONT, 10),
-        ).pack(fill="x", padx=10, pady=(12, 0))
+        ).pack(fill="x", padx=10, pady=(8, 0))
         wiki_user_entry = tk.Entry(wiki_tab)
         wiki_user_entry.insert(0, wiki_cfg.get("wiki_username", ""))
         wiki_user_entry.pack(fill="x", padx=10, pady=(2, 10))
@@ -876,8 +894,15 @@ class App:
         ).pack(side="left", padx=(6, 0))
 
         def save_wiki_login():
-            wiki_upload.save_wiki_credentials(wiki_user_entry.get().strip(), wiki_pw_entry.get())
-            self.log("[안내] 위키 로그인 설정을 저장했습니다 (config.json)")
+            site_url = wiki_site_entry.get().strip()
+            if not site_url:
+                messagebox.showwarning("입력 필요", "위키 사이트 주소는 비워둘 수 없습니다.", parent=win)
+                return
+            wiki_upload.save_wiki_credentials(
+                wiki_user_entry.get().strip(), wiki_pw_entry.get(),
+                site_url=site_url, path=wiki_path_entry.get().strip(),
+            )
+            self.log("[안내] 위키 설정을 저장했습니다 (config.json)")
 
         tk.Button(wiki_tab, text="저장", command=save_wiki_login).pack(anchor="e", padx=10, pady=(4, 10))
 

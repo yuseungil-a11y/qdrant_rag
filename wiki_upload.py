@@ -34,7 +34,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 다시 일으킬 수 있다. 뉴스 스크래핑엔 필요 없는 기능이라 일부러 쓰지 않는다.
 
 WIKI_DEFAULT_CONFIG = {
-    "wiki_site_url": "example.com",
+    # 사내 위키 실제 도메인 - mcp_config_helper.py의 MediaWiki MCP 서버 기본 URL
+    # ("https://pms.utinfo.co.kr/mediawiki/api.php")과 같은 서버라 진짜 기본값으로 써도
+    # 대부분의 사용자에게 그대로 맞음(2026-09-06 사용자 요청 - Qdrant URL과 달리 이건
+    # 사용자마다 다른 값이 아니라 사내 공통 주소라 example.com 같은 가짜 플레이스홀더 대신
+    # 실제 값을 기본으로 넣어둠).
+    "wiki_site_url": "pms.utinfo.co.kr",
     "wiki_path": "/mediawiki/",
     "wiki_username": "REPLACE_ME",
     "wiki_password": "REPLACE_ME",
@@ -58,12 +63,18 @@ def get_wiki_config() -> dict:
     return {key: register.CONFIG[key] for key in WIKI_DEFAULT_CONFIG}
 
 
-def save_wiki_credentials(username: str, password: str) -> None:
-    """GUI의 설정 화면에서 위키 로그인 계정/비밀번호를 수정했을 때 호출한다.
+def save_wiki_credentials(username: str, password: str, site_url: str | None = None, path: str | None = None) -> None:
+    """GUI의 설정 화면에서 위키 로그인 계정/비밀번호(+주소)를 수정했을 때 호출한다.
     config.json에 저장하고, 이미 로드되어 있는 register.CONFIG도 즉시 갱신해 앱을
-    재시작하지 않아도 다음 위키 업로드부터 바로 새 계정으로 로그인하게 한다."""
+    재시작하지 않아도 다음 위키 업로드부터 바로 새 값으로 동작하게 한다. site_url/path는
+    설정 화면에 입력칸이 없던 시절 호출부와의 호환을 위해 선택 인자로 둠 - 실사용 보고
+    (2026-09-06)로 "위키 사이트 주소를 설정 화면에서 못 바꾼다"는 걸 발견해 추가."""
     register.CONFIG["wiki_username"] = username
     register.CONFIG["wiki_password"] = password
+    if site_url is not None:
+        register.CONFIG["wiki_site_url"] = site_url
+    if path is not None:
+        register.CONFIG["wiki_path"] = path
     register.CONFIG_PATH.write_text(
         json.dumps(register.CONFIG, ensure_ascii=False, indent=2), encoding="utf-8"
     )

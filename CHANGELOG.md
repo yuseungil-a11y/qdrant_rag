@@ -5,6 +5,17 @@
 - **minor**: 마이너 기능 변화
 - **patch**: 버그 수정
 
+## 3.1.1
+
+- **버그 수정**: 설정 화면 "위키(문서등록)" 탭에 위키 로그인 계정/비밀번호 입력칸만
+  있고 정작 위키 사이트 주소(`wiki_site_url`)를 바꿀 입력칸이 없어서, config.json을
+  직접 열어야만 고칠 수 있었던 문제 수정(실사용 보고). `wiki_path`도 함께 입력칸
+  추가. `wiki_upload.save_wiki_credentials()`가 site_url/path도 함께 저장하도록 확장.
+- **개선**: `WIKI_DEFAULT_CONFIG`의 `wiki_site_url` 기본값을 가짜 `example.com`에서
+  실제 사내 위키 도메인 `pms.utinfo.co.kr`로 변경 - Qdrant URL과 달리 이건 사용자마다
+  다른 값이 아니라 사내 공통 주소라(mcp_config_helper.py의 MediaWiki MCP 기본 URL과
+  동일 서버) 진짜 기본값으로 써도 대부분 그대로 맞음.
+
 ## 3.1.0
 
 - **기능 추가**: 상단에 주 메뉴바 추가(사용자 요청). tk.Menu 구조로 둬서 메뉴가
