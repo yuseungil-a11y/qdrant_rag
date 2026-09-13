@@ -15,6 +15,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -88,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.1.2", "상단에 파일등록 총 처리 시간 표시 추가"),
     ("3.1.1", "설정 화면에 위키 사이트 주소(wiki_site_url) 입력칸 추가 - 기존엔 없었음"),
     ("3.1.0", "상단 메뉴바 추가 - 도움말 > 프로그램 소개/프로그램 이력 메뉴 신설"),
     ("3.0.14", "Qdrant URL 설정칸에 진짜 플레이스홀더 UX 도입 (빈 값 + 회색 예시)"),
@@ -286,6 +288,16 @@ class App:
         self._app_update_blinking = False
         self._app_update_blink_idx = 0
         self._app_update_manifest_entry = None
+
+        # 사용자 요청: "UI 상단에 등록된 자료 총 처리 시간 표시해줘" - 등록 중엔 1초마다
+        # 갱신되며 실시간으로 올라가고, 끝나면 그 시점 값에 멈춘 채로(다음 등록 시작 전까지)
+        # 남아있는다. version_bar가 이미 복잡해서 따로 한 줄 둠.
+        timing_bar = tk.Frame(root)
+        timing_bar.pack(side="top", fill="x", padx=10, pady=(2, 0))
+        self.elapsed_time_label = tk.Label(timing_bar, text="", fg="#888888", font=(KOREAN_FONT, 8))
+        self.elapsed_time_label.pack(side="left")
+        self._registration_running = False
+        self._registration_start_time = 0.0
 
         # 등록/삭제 관련 섹션이 계속 늘어나도 진행 상태 로그가 항상 보이도록,
         # 아래쪽(진행률+로그)은 창에 고정하고 위쪽 콘텐츠만 스크롤되게 분리한다.
@@ -1263,11 +1275,37 @@ class App:
         self.progress_label.config(text="0%")
         self.file_progress_label.config(text="파일 -/-")
         self.unit_progress_label.config(text="")
+        self._registration_start_time = time.time()
+        self._registration_running = True
+        self._tick_elapsed_time()
         # tkinter 변수는 메인 스레드에서 읽고, 백그라운드 스레드에는 순수 값만 넘긴다
         process_images = self.process_images_var.get()
         threading.Thread(
             target=self.run_registration, args=(paths, process_images, personal, shared, proposal), daemon=True
         ).start()
+
+    @staticmethod
+    def _format_elapsed(seconds: float) -> str:
+        seconds = int(seconds)
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}시간 {minutes}분 {seconds}초"
+        if minutes:
+            return f"{minutes}분 {seconds}초"
+        return f"{seconds}초"
+
+    def _tick_elapsed_time(self):
+        """등록 진행 중 1초마다 스스로 재예약하며 경과 시간을 갱신한다. 등록이 끝나면
+        (run_registration의 finally에서 self._registration_running = False로 바뀜) 다음
+        틱에서 스스로 멈추고, 그 순간의 최종 값을 "완료:"로 표시한 채 남겨둔다(사용자
+        요청: "등록된 자료 총 처리 시간 표시해줘")."""
+        elapsed = time.time() - self._registration_start_time
+        if self._registration_running:
+            self.elapsed_time_label.config(text=f"처리 시간: {self._format_elapsed(elapsed)}")
+            self.root.after(1000, self._tick_elapsed_time)
+        else:
+            self.elapsed_time_label.config(text=f"처리 시간(완료): {self._format_elapsed(elapsed)}")
 
     def run_registration(
         self, paths: list[Path], process_images: bool, personal: bool, shared: bool, proposal: bool,
@@ -1291,6 +1329,7 @@ class App:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
             self.busy = False
+            self._registration_running = False
             self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
 
     def _paste_from_clipboard(self, widget):
