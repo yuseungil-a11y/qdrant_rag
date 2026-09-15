@@ -1171,8 +1171,14 @@ async def register_file(sessions: list[tuple[ClientSession, str]], path: Path, p
     print(f"등록 완료: {path.name} (텍스트 {len(text_records)}청크)")
 
 
-async def register_targets(sessions: list[tuple[ClientSession, str]], targets: list[Path], progress_callback=None):
-    """파일/폴더가 섞인 경로 목록을 받아 실제 파일 목록으로 펼친 뒤 등록."""
+async def register_targets(
+    sessions: list[tuple[ClientSession, str]], targets: list[Path], progress_callback=None, stop_event=None,
+):
+    """파일/폴더가 섞인 경로 목록을 받아 실제 파일 목록으로 펼친 뒤 등록.
+    stop_event(threading.Event)가 있고 set돼 있으면, 다음 파일을 시작하기 전에 멈춘다
+    (사용자 요청: "등록 시간이 너무 오래 걸리는 경우가 있어, 중지 버튼 만들어줘") - 현재
+    처리 중인 파일은 끝까지 마치고 나서 중단하므로 중간에 끊겨서 일부만 저장되는 일은
+    없다."""
     files = []
     for target in targets:
         if not target.exists():
@@ -1192,6 +1198,10 @@ async def register_targets(sessions: list[tuple[ClientSession, str]], targets: l
     total = len(files)
     print(f"총 {total}개 파일 등록 시작...")
     for i, f in enumerate(files):
+        if stop_event is not None and stop_event.is_set():
+            print(f"[안내] 사용자 요청으로 등록을 중단합니다 ({i}/{total}개 완료, 나머지 {total - i}개는 건너뜀).")
+            return
+
         def _unit_progress(unit_index, unit_total, unit_label, i=i, f=f):
             if progress_callback is None:
                 return
@@ -1210,9 +1220,11 @@ async def register_targets(sessions: list[tuple[ClientSession, str]], targets: l
 async def main(
     targets: Path | list[Path], progress_callback=None,
     personal: bool = True, shared: bool = False, proposal: bool = False,
+    stop_event=None,
 ):
     """personal/shared/proposal: 각각 개인/공용/제안서 자료 저장소 등록 여부. 여러 개가
-    True면 같은 내용을 그만큼 여러 곳에 저장."""
+    True면 같은 내용을 그만큼 여러 곳에 저장. stop_event는 register_targets에 그대로
+    전달됨(파일 단위 중지)."""
     if isinstance(targets, Path):
         targets = [targets]
 
@@ -1254,7 +1266,7 @@ async def main(
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             sessions.append((session, tool))
-        await register_targets(sessions, targets, progress_callback=progress_callback)
+        await register_targets(sessions, targets, progress_callback=progress_callback, stop_event=stop_event)
 
     print("모든 작업 완료.")
     print(f"추출된 이미지는 여기 저장됨: {IMAGES_DIR}")

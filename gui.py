@@ -89,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.1.2"
+APP_VERSION = "3.1.3"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.1.3", "파일등록 중지 버튼 추가 - 현재 파일 완료 후 안전하게 중단"),
     ("3.1.2", "상단에 파일등록 총 처리 시간 표시 추가"),
     ("3.1.1", "설정 화면에 위키 사이트 주소(wiki_site_url) 입력칸 추가 - 기존엔 없었음"),
     ("3.1.0", "상단 메뉴바 추가 - 도움말 > 프로그램 소개/프로그램 이력 메뉴 신설"),
@@ -298,6 +299,7 @@ class App:
         self.elapsed_time_label.pack(side="left")
         self._registration_running = False
         self._registration_start_time = 0.0
+        self._registration_stop_event = threading.Event()
 
         # 등록/삭제 관련 섹션이 계속 늘어나도 진행 상태 로그가 항상 보이도록,
         # 아래쪽(진행률+로그)은 창에 고정하고 위쪽 콘텐츠만 스크롤되게 분리한다.
@@ -396,6 +398,13 @@ class App:
         btn_frame.pack(fill="x", padx=5, pady=(0, 5))
         tk.Button(btn_frame, text="파일 선택...", command=self.browse_files).pack(side="left")
         tk.Button(btn_frame, text="폴더 선택...", command=self.browse_folder).pack(side="left", padx=5)
+        # 사용자 요청: "등록 시간이 너무오래 걸리는 경우가 있어, 중지 버튼 만들어줘" - 등록
+        # 중일 때만 활성화. 파일 단위로 멈추므로(register.py의 register_targets 참고) 클릭
+        # 즉시 멈추지는 않고 현재 처리 중인 파일은 끝까지 마친 뒤 중단됨.
+        self.stop_registration_button = tk.Button(
+            btn_frame, text="중지", command=self.stop_registration, state="disabled", fg="#c0392b",
+        )
+        self.stop_registration_button.pack(side="left", padx=5)
 
         # GUI 기본값은 항상 꺼짐(체크 안 함) - 이미지 처리는 느리므로 필요할 때만 켜서 사용
         self.process_images_var = tk.BooleanVar(value=False)
@@ -1277,12 +1286,25 @@ class App:
         self.unit_progress_label.config(text="")
         self._registration_start_time = time.time()
         self._registration_running = True
+        self._registration_stop_event.clear()
+        self.stop_registration_button.config(state="normal")
         self._tick_elapsed_time()
         # tkinter 변수는 메인 스레드에서 읽고, 백그라운드 스레드에는 순수 값만 넘긴다
         process_images = self.process_images_var.get()
         threading.Thread(
             target=self.run_registration, args=(paths, process_images, personal, shared, proposal), daemon=True
         ).start()
+
+    def stop_registration(self):
+        """상단 파일등록 영역의 "중지" 버튼(사용자 요청) - register.py의
+        register_targets가 파일 단위로 이 이벤트를 확인해서, 현재 처리 중인 파일은 끝까지
+        마치고 다음 파일 시작 전에 중단한다(즉시 중단은 아님 - 네트워크 저장 중간에 끊으면
+        일부만 저장되는 문제가 생길 수 있어 파일 경계에서만 멈추게 함)."""
+        if not self._registration_running:
+            return
+        self._registration_stop_event.set()
+        self.stop_registration_button.config(state="disabled")
+        self.log("[알림] 중지 요청됨 - 현재 처리 중인 파일을 마치는 대로 중단합니다.")
 
     @staticmethod
     def _format_elapsed(seconds: float) -> str:
@@ -1321,6 +1343,7 @@ class App:
                 register.main(
                     paths, progress_callback=self.progress_queue.put,
                     personal=personal, shared=shared, proposal=proposal,
+                    stop_event=self._registration_stop_event,
                 )
             )
         except Exception as e:
@@ -1331,6 +1354,7 @@ class App:
             self.busy = False
             self._registration_running = False
             self.root.after(0, lambda: self.status_label.config(text="● 대기 중", fg="#555555"))
+            self.root.after(0, lambda: self.stop_registration_button.config(state="disabled"))
 
     def _paste_from_clipboard(self, widget):
         try:
