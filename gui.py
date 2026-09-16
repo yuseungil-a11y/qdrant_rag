@@ -89,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.1.3"
+APP_VERSION = "3.2.0"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.2.0", "\"내 개인 저장소 보기\" 추가 - 검색어 없이 내 저장소 파일 전체를 트리로 확인"),
     ("3.1.3", "파일등록 중지 버튼 추가 - 현재 파일 완료 후 안전하게 중단"),
     ("3.1.2", "상단에 파일등록 총 처리 시간 표시 추가"),
     ("3.1.1", "설정 화면에 위키 사이트 주소(wiki_site_url) 입력칸 추가 - 기존엔 없었음"),
@@ -498,6 +499,16 @@ class App:
         tk.Button(
             search_frame, text="선택 항목 삭제", fg="#a33", command=self.start_delete_selected,
         ).pack(anchor="e", padx=5, pady=5)
+
+        # 명시적 사용자 요청("사용자 등록 윈도우 프로그램에서 내 개인 저장소만 보고 싶어") -
+        # 위 검색/삭제 섹션은 검색어가 있어야 결과가 나오는 의미 기반 검색이라 "내가 뭘
+        # 저장했는지" 전체를 검색어 없이 볼 방법이 없었다. 게이트웨이의 qdrant_list_mine을
+        # 호출해서 파일(source)별로 묶어(텍스트 청크 수/이미지 수) 보여주는 팝업.
+        my_storage_frame = tk.LabelFrame(top, text="내 개인 저장소 보기")
+        my_storage_frame.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Button(
+            my_storage_frame, text="내 저장소 목록 보기...", command=self.open_my_storage_popup,
+        ).pack(anchor="w", padx=5, pady=5)
 
         # --- 위키 문서 등록 (wiki_upload.py, MediaWiki 자동 업로드) ---
         wiki_frame = tk.LabelFrame(top, text="위키 문서 등록")
@@ -1586,6 +1597,74 @@ class App:
                 total += await register.delete_proposal_by_metadata(meta)
         print(f"선택 삭제 완료: 총 {total}개 항목 삭제")
         return total
+
+    def open_my_storage_popup(self):
+        """명시적 사용자 요청("사용자 등록 윈도우 프로그램에서 내 개인 저장소만 보고
+        싶어") - register.list_mine_qdrant()를 호출해 내 개인 저장소에 등록된 파일을
+        소스별로(텍스트 청크 수/이미지 수/제목) 트리 형태로 보여준다. qdrant_mcp_gui.py의
+        관리자 현황 팝업(Toplevel + Treeview + 백그라운드 스레드 + root.after(0, ...))과
+        같은 패턴 - Tkinter는 스레드 세이프하지 않으므로 조회는 백그라운드에서, 위젯 갱신은
+        반드시 메인 스레드에서."""
+        if self.busy:
+            self.log("[알림] 이미 처리 중입니다. 완료 후 다시 시도하세요.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("내 개인 저장소")
+        win.geometry("640x420")
+
+        status_var = tk.StringVar(value="불러오는 중...")
+        tk.Label(win, textvariable=status_var, fg="#555555").pack(anchor="w", padx=10, pady=(8, 0))
+
+        tree_row = tk.Frame(win)
+        tree_row.pack(fill="both", expand=True, padx=10, pady=8)
+        tree_scroll = tk.Scrollbar(tree_row, orient="vertical")
+        tree_scroll.pack(side="right", fill="y")
+        tree = ttk.Treeview(
+            tree_row, columns=("title", "text_chunks", "images"), show="tree headings",
+            yscrollcommand=tree_scroll.set,
+        )
+        tree.heading("#0", text="파일(source)")
+        tree.column("#0", width=280, anchor="w")
+        tree.heading("title", text="제목")
+        tree.column("title", width=160, anchor="w")
+        tree.heading("text_chunks", text="텍스트 청크")
+        tree.column("text_chunks", width=90, anchor="center")
+        tree.heading("images", text="이미지")
+        tree.column("images", width=70, anchor="center")
+        tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.config(command=tree.yview)
+
+        def fetch():
+            try:
+                data = asyncio.run(register.list_mine_qdrant())
+                error = None
+            except Exception as e:
+                data, error = None, register.describe_exception(e)
+
+            def apply():
+                if error:
+                    status_var.set(f"조회 실패: {error}")
+                    return
+                sources = data.get("sources") or []
+                if not sources:
+                    status_var.set(f"개인 저장소({data.get('collection') or '?'})에 등록된 파일이 없습니다.")
+                    return
+                for s in sources:
+                    tree.insert(
+                        "", "end", text=s.get("source", "?"),
+                        values=(s.get("title") or "", s.get("text_chunks", 0), s.get("images", 0)),
+                    )
+                total_chunks = sum(s.get("text_chunks", 0) for s in sources)
+                total_images = sum(s.get("images", 0) for s in sources)
+                status_var.set(
+                    f"개인 저장소({data.get('collection')}) - 파일 {len(sources)}개, "
+                    f"텍스트 청크 {total_chunks}개, 이미지 {total_images}개"
+                )
+
+            self.root.after(0, apply)
+
+        threading.Thread(target=fetch, daemon=True).start()
 
     # --- 위키 문서 등록 ---
 

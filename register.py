@@ -1497,6 +1497,41 @@ async def search_my_qdrant(query: str) -> list[dict]:
     return _keyword_filter(query, parsed)
 
 
+async def list_mine_qdrant() -> dict:
+    """명시적 사용자 요청("사용자 등록 윈도우 프로그램에서 내 개인 저장소만 보고 싶어") -
+    게이트웨이의 qdrant_list_mine을 호출해 본인 개인 저장소에 등록된 파일을 소스별로
+    (텍스트 청크 수/이미지 수/제목) 나열한다. search_my_qdrant()는 검색어가 있어야 하는
+    의미 기반 검색이라 "내가 뭘 저장했는지" 전체를 검색어 없이 볼 방법이 없었는데, 이
+    함수는 그 용도(GUI의 "내 저장소 보기")로 쓴다. _call_delete_tool과 동일하게 dict
+    반환값은 structuredContent를 우선 쓰고 없으면 content의 JSON 문자열을 파싱한다.
+    :return: {"collection": str, "sources": [{"source", "title", "text_chunks", "images"}],
+    "total_sources": int}. 실패 시 {"collection": None, "sources": [], "total_sources": 0}."""
+    async with streamablehttp_client(MCP_URL) as mcp_streams:
+        read, write = mcp_streams[0], mcp_streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("qdrant_list_mine", {})
+
+    if getattr(result, "isError", False):
+        message = "\n".join(block.text for block in result.content if hasattr(block, "text")) or str(result)
+        print(f"[오류] {message}")
+        return {"collection": None, "sources": [], "total_sources": 0}
+
+    data = None
+    structured = getattr(result, "structuredContent", None)
+    if isinstance(structured, dict) and "sources" in structured:
+        data = structured
+    if data is None:
+        for block in result.content:
+            if hasattr(block, "text"):
+                try:
+                    data = json.loads(block.text)
+                    break
+                except Exception:
+                    pass
+    return data or {"collection": None, "sources": [], "total_sources": 0}
+
+
 async def search_proposal_qdrant(query: str) -> list[dict]:
     """qdrant_find_proposal로 검색해서 [{"content": str, "metadata": dict}, ...] 목록을 반환.
     전략기획실 자료저장소 전용 키(MCP_URL_PROPOSAL)로 호출 - search_qdrant()의 전략기획실
