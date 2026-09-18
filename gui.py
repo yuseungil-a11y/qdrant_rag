@@ -89,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.2.1"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.2.1", "파일등록 중 한 파일 오류로 전체가 멈추던 버그 수정, 오류 traceback을 app.log에 기록"),
     ("3.2.0", "\"내 개인 저장소 보기\" 추가 - 검색어 없이 내 저장소 파일 전체를 트리로 확인"),
     ("3.1.3", "파일등록 중지 버튼 추가 - 현재 파일 완료 후 안전하게 중단"),
     ("3.1.2", "상단에 파일등록 총 처리 시간 표시 추가"),
@@ -1359,6 +1360,7 @@ class App:
             )
         except Exception as e:
             self.log(f"[오류] {register.describe_exception(e)}")
+            app_logger.exception("파일등록 실패(세션 설정 등 파일 루프 바깥 단계)")
         finally:
             sys.stdout = old_stdout
             sys.stderr = old_stderr

@@ -93,6 +93,21 @@ class _SuppressSSETeardownNoise(logging.Filter):
 
 logging.getLogger("mcp.client.streamable_http").addFilter(_SuppressSSETeardownNoise())
 
+# hwp5(pyhwp)는 내부 파싱 진행 상황(타입 컴파일 등)을 INFO로, 문서에 알려지지 않은
+# 서식 코드를 만나면 WARNING으로 아주 수다스럽게 찍는다 - 실사용 로그 확인 결과 hwp
+# 파일 하나(밑줄 서식이 많은 문서)에서만 "undefined UnderlineStyle" 경고가 수백 줄
+# 나왔다(2026-09-19). 전부 실제 등록 결과에는 영향 없는 무해한 내부 로그라, app.log의
+# 2MB 용량 상한을 이 노이즈가 금방 채워서 정작 중요한 오류 traceback이 일찍 회전돼
+# 사라지는 걸 막기 위해 hwp5 쪽은 ERROR 이상만 남기도록 낮춘다.
+logging.getLogger("hwp5").setLevel(logging.ERROR)
+
+# gui.py가 루트 로거에 파일 핸들러(설치 폴더의 app.log)를 달아두므로, 여기서 로그를
+# 남기면 자동으로 같은 파일에 쌓인다. print()는 GUI 로그창(진행 상태/오류 리스트박스)
+# 용이라 요약 문자열만 담지만, app.log에는 전체 traceback까지 남겨서 다음에 비슷한
+# 실패가 나면 정확한 원인을 바로 찾을 수 있게 한다(2026-09-19 실사용 보고 - TaskGroup
+# 예외가 나도 실제 traceback을 어디서도 찾을 수 없어 원인 특정이 어려웠음).
+_log = logging.getLogger(__name__)
+
 try:
     import pytesseract
     OCR_LIB_AVAILABLE = True
@@ -1196,6 +1211,7 @@ async def register_targets(
         return
 
     total = len(files)
+    failed_files: list[str] = []
     print(f"총 {total}개 파일 등록 시작...")
     for i, f in enumerate(files):
         if stop_event is not None and stop_event.is_set():
@@ -1213,8 +1229,22 @@ async def register_targets(
             except Exception:
                 pass
 
-        await register_file(sessions, f, progress_callback=_unit_progress)
+        try:
+            await register_file(sessions, f, progress_callback=_unit_progress)
+        except Exception as e:
+            # 실사용 보고(2026-09-19): 파일 하나에서 예외(예: MCP 세션 TaskGroup 오류)가
+            # 나면 여기서 try/except 없이 그대로 위로 전파돼 register_targets 전체가
+            # 멈추고, 아직 처리 안 한 나머지 파일들은 시도조차 안 되고 있었다(37개 중 3번째
+            # 파일에서 멈춘 사례). 한 파일의 실패가 배치 전체를 막지 않도록 여기서 잡아
+            # 기록만 하고 다음 파일로 계속 진행한다.
+            print(f"[오류] {f.name} 등록 실패, 건너뛰고 계속 진행합니다: {describe_exception(e)}")
+            _log.exception("파일 등록 실패: %s", f)  # app.log에 전체 traceback까지 남김
+            failed_files.append(f.name)
+            continue
         _unit_progress(1, 1, "완료")  # 세부 진행률을 못 받는 포맷(.doc/.txt 등)도 파일 완료 시 확실히 갱신
+
+    if failed_files:
+        print(f"[안내] {total}개 중 {len(failed_files)}개 파일 등록 실패(건너뜀): {', '.join(failed_files)}")
 
 
 async def main(
