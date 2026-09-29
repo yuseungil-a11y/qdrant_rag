@@ -89,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.3.1"
+APP_VERSION = "3.3.2"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.3.2", "개인인증키 발급/재발급 성공 시 상단 키 상태를 새 키로 자동 재확인"),
     ("3.3.1", "자기업데이트가 배포판 폴더 구조 문제로 실패하지 않도록 방어 로직 추가"),
     ("3.3.0", "상단에 \"개인인증키 발급/재발급\" 버튼 추가 - 그룹웨어 ID/PW로 직접 키 발급"),
     ("3.2.1", "파일등록 중 한 파일 오류로 전체가 멈추던 버그 수정, 오류 traceback을 app.log에 기록"),
@@ -1777,6 +1778,13 @@ class App:
                         register.save_mcp_urls(url, register.MCP_URL_SHARED, register.MCP_URL_PROPOSAL)
                         status_var.set(f"{result.get('user_name', '')}님, {label} 완료 - 개인 저장소 URL이 저장되었습니다.")
                         self.log(f"[개인인증키] {label} 완료 - {result.get('user_name', '')}")
+                        # 사용자 요청: "키 발급이 정상적으로 완료되면 새로고침해서 접속해" -
+                        # register.save_mcp_urls()가 register.MCP_URL 전역값은 즉시 갱신하지만,
+                        # 상단 "개인키" 상태 표시줄은 시작할 때 한 번만 확인하고는 자동으로 다시
+                        # 확인하지 않아서 발급 직후에도 예전 상태로 남아있었다 - Qdrant 저장소
+                        # 탭 저장 때와 동일하게, 발급 성공 시 새 키로 바로 재확인해서 갱신한다.
+                        self.personal_key_status_label.config(text="개인키: 확인 중...", fg="#888888")
+                        threading.Thread(target=self._check_key_status_on_startup, daemon=True).start()
                     else:
                         # 버그 수정 - 실패 시 status_var만 바뀌고 app.log/운영로그 어디에도
                         # 안 남아서, 실사용 중 "서버 오류" 원인(HTTP 상태코드 등 detail)을
