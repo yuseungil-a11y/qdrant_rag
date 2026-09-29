@@ -89,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.3.2"
+APP_VERSION = "3.3.3"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.3.3", "\"이미지 처리\" 체크박스에 필요 프로그램(Tesseract/Ollama) 설치 안내 - 툴팁과, 항상 보이는 \"ⓘ\" 버튼(복사 가능한 팝업) 추가"),
     ("3.3.2", "개인인증키 발급/재발급 성공 시 상단 키 상태를 새 키로 자동 재확인"),
     ("3.3.1", "자기업데이트가 배포판 폴더 구조 문제로 실패하지 않도록 방어 로직 추가"),
     ("3.3.0", "상단에 \"개인인증키 발급/재발급\" 버튼 추가 - 그룹웨어 ID/PW로 직접 키 발급"),
@@ -171,6 +172,50 @@ class QueueWriter:
         pass
 
 
+class _Tooltip:
+    """마우스를 올리면 잠깐 뒤 설명을 보여주는 단순 툴팁(사용자 요청: "이미지 처리 체크
+    부분 적용하려면 어떤 프로그램을 설치해야 하는지 설명을 툴팁으로 반영"). tkinter에는
+    툴팁이 기본 내장돼 있지 않아 <Enter>/<Leave>로 직접 구현 - 테두리 없는 작은
+    Toplevel을 위젯 바로 아래에 띄우는 흔한 패턴."""
+
+    def __init__(self, widget, text: str, delay_ms: int = 400):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self.tip_window: tk.Toplevel | None = None
+        self._after_id: str | None = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+
+    def _schedule(self, event=None):
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _show(self):
+        if self.tip_window or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw, text=self.text, justify="left", bg="#ffffe0", fg="#333333",
+            relief="solid", borderwidth=1, font=(KOREAN_FONT, 9), wraplength=420,
+        ).pack(ipadx=6, ipady=4)
+
+    def _hide(self, event=None):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+        if self.tip_window:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
+def _add_tooltip(widget, text: str) -> None:
+    _Tooltip(widget, text)
+
+
 def parse_drop_paths(data: str) -> list[Path]:
     """tkinterdnd2가 넘기는 드롭 문자열 파싱. 공백 포함 경로는 {..}로 감싸져 온다."""
     paths, buf, in_brace = [], "", False
@@ -235,6 +280,21 @@ def _entry_real_value(entry: tk.Entry) -> str:
 
 
 class App:
+    # 툴팁("ⓘ" 버튼 팝업과 공유)에 쓰는 "이미지 처리" 안내 - 한 군데만 고치면 되게 상수로 뺌.
+    _IMAGE_PROCESSING_HELP_TEXT = (
+        "OCR(이미지 속 글자 인식)\n"
+        "  Tesseract 엔진 설치 필요(파이썬 패키지와 별도)\n"
+        "  Windows: https://github.com/UB-Mannheim/tesseract/wiki 에서 설치\n"
+        "  (설치 중 \"Additional language data\"에서 Korean 체크)\n"
+        "  기본 경로(C:\\Program Files\\Tesseract-OCR\\)가 아니면 config.json의\n"
+        "  tesseract_cmd에 실제 경로를 직접 지정해야 함\n\n"
+        "이미지 캡션(의미 설명, 선택)\n"
+        "  Ollama 설치: https://ollama.com/download\n"
+        "  설치 후 모델 받기: ollama pull moondream\n"
+        "  Ollama가 꺼져있거나 모델이 없어도 OCR 텍스트만으로 등록됨\n\n"
+        "※ 둘 다 없어도 이미지 자체는 저장되고, 없는 기능만 건너뜁니다."
+    )
+
     def __init__(self, root):
         self.root = root
         root.title(f"Qdrant 문서 등록 v{APP_VERSION}")
@@ -420,9 +480,18 @@ class App:
 
         # GUI 기본값은 항상 꺼짐(체크 안 함) - 이미지 처리는 느리므로 필요할 때만 켜서 사용
         self.process_images_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
+        process_images_check = tk.Checkbutton(
             btn_frame, text="이미지 처리(추출/OCR/캡션)", variable=self.process_images_var,
-        ).pack(side="left", padx=10)
+        )
+        process_images_check.pack(side="left", padx=10)
+        _add_tooltip(process_images_check, self._IMAGE_PROCESSING_HELP_TEXT)
+        # 사용자 요청: "하일라이트가 없어서 사용자가 알 수 없어 옆에 버튼 만들어서 팝업으로
+        # 안내하고 텍스트는 복사 가능하게 해줘, 툴팁 기능은 유지하고" - 마우스를 올려야만
+        # 보이는 툴팁은 그런 게 있는지 자체를 모르면 못 찾으므로, 항상 보이는 작은 버튼을
+        # 추가해 같은 안내를 복사 가능한 팝업으로도 볼 수 있게 함(툴팁은 그대로 둠).
+        tk.Button(
+            btn_frame, text="ⓘ", width=2, command=self._show_image_processing_help,
+        ).pack(side="left")
 
         self.status_label = tk.Label(btn_frame, text="● 대기 중", fg="#555555")
         self.status_label.pack(side="right")
@@ -828,6 +897,41 @@ class App:
         text.config(state="disabled")  # 읽기 전용 - 사용자가 실수로 내용을 고칠 일 없게
 
         tk.Button(win, text="닫기", command=win.destroy).pack(pady=(0, 10))
+
+    def _show_image_processing_help(self):
+        """"이미지 처리" 체크박스 옆 "ⓘ" 버튼(사용자 요청: "하일라이트가 없어서 사용자가
+        알 수 없어 옆에 버튼 만들어서 팝업으로 안내하고 텍스트는 복사가능하게 해줘, 툴팁
+        기능은 유지하고") - 마우스를 올려야만 보이는 툴팁은 그런 안내가 있는지조차 모르면
+        찾을 수 없어서, 항상 보이는 버튼으로 같은 내용을 복사 가능한 팝업으로도 제공한다
+        (기존 툴팁은 그대로 유지, _IMAGE_PROCESSING_HELP_TEXT를 공유해서 둘이 항상
+        같은 내용을 보여줌)."""
+        win = tk.Toplevel(self.root)
+        win.title("이미지 처리 안내")
+        win.geometry("480x420")
+        win.transient(self.root)
+
+        btn_row = tk.Frame(win)
+        btn_row.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+
+        text_frame = tk.Frame(win)
+        text_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side="right", fill="y")
+        text = tk.Text(text_frame, wrap="word", height=14, yscrollcommand=scrollbar.set, font=(KOREAN_FONT, 10))
+        text.insert("end", self._IMAGE_PROCESSING_HELP_TEXT)
+        text.config(state="disabled")  # 편집은 막되 마우스 드래그+Ctrl+C 선택 복사는 계속 됨
+        text.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=text.yview)
+
+        def copy_all():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self._IMAGE_PROCESSING_HELP_TEXT)
+            copy_button.config(text="복사됨!")
+            self.root.after(1500, lambda: copy_button.config(text="전체 복사"))
+
+        copy_button = tk.Button(btn_row, text="전체 복사", command=copy_all)
+        copy_button.pack(side="left")
+        tk.Button(btn_row, text="닫기", command=win.destroy).pack(side="right")
 
     def open_settings_dialog(self, initial_tab: int | None = None):
         """개인/공용/제안서 자료 저장소 MCP 서버 URL, 위키 로그인 계정/비밀번호를
