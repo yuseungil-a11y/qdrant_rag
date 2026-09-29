@@ -153,9 +153,25 @@ def download_and_apply_app_update(manifest_entry: dict) -> None:
     zip_path.unlink(missing_ok=True)
     log.info("압축 해제 완료: %s", new_dir)
 
+    # 정상 배포판은 exe 본체+_internal이 압축 루트에 바로 있어야 하는데, 게시 과정에서
+    # 폴더 자체(예: dist\utinfo_vdr 폴더 통째)를 압축해 "utinfo_vdr\utinfo_vdr.exe"처럼
+    # 한 겹 더 감싸인 채 올라오는 실수가 실제로 있었다(2026-09-29 실사용 보고 - v3.3.0
+    # 배포판이 이 상태로 게시돼 모든 사용자의 자기업데이트가 "배포판 구조가 예상과
+    # 다름"으로 실패함). 루트에 exe가 없으면, 새로 풀린 폴더 바로 아래에 하위 폴더가
+    # 정확히 하나만 있고 그 안에 exe가 있는지 확인해서 있으면 그 하위 폴더를 실제
+    # 배포판 위치로 간주해 자동으로 보정한다 - 앞으로 같은 실수가 또 나도 자기업데이트가
+    # 깨지지 않도록 방어.
     if not (new_dir / exe_name).exists():
-        shutil.rmtree(new_dir, ignore_errors=True)
-        raise RuntimeError(f"받은 배포판 안에 {exe_name}이 없습니다 (배포판 구조가 예상과 다름)")
+        subdirs = [p for p in new_dir.iterdir() if p.is_dir()]
+        if len(subdirs) == 1 and (subdirs[0] / exe_name).exists():
+            log.info("배포판이 %s 하위 폴더에 한 겹 더 감싸여 있음 - 자동 보정", subdirs[0].name)
+            nested = subdirs[0]
+            for item in nested.iterdir():
+                shutil.move(str(item), str(new_dir / item.name))
+            nested.rmdir()
+        else:
+            shutil.rmtree(new_dir, ignore_errors=True)
+            raise RuntimeError(f"받은 배포판 안에 {exe_name}이 없습니다 (배포판 구조가 예상과 다름)")
 
     # 배포 zip에는 exe 실행에 필요한 파일(exe 본체 + _internal)만 들어있고, config.json
     # (사용자가 설정 화면에서 저장한 Qdrant URL/키, 위키 계정 등)이나
