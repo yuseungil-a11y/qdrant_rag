@@ -245,6 +245,70 @@ def check_key_status(mcp_url: str, timeout: float = 5.0) -> dict:
     return {"ok": True, "reason": None}
 
 
+# 명시적 사용자 요청("qdrant 벡터 등록 프로그램에서 개인저장소 인증키를 발급하는 기능
+# 추가" - 여러 차례 설계 검토 끝에 확정: 그룹웨어 ID/PW는 서버가 bcrypt로 검증하고,
+# 키 값 자체는 클라이언트가 생성해서 보냄) - 게이트웨이(qdrant_mcp v4.10.0)의
+# /mcp/self-service/issue, /mcp/self-service/regenerate를 호출해 개인 키를
+# 자가발급/재발급 받는다. 호스트는 신규 사용자가 알 수 없는 정보라 상수로 내장해뒀다 -
+# 이것만 있으면 admin이 키를 미리 만들어 배포하지 않아도 최초 실행부터 바로 발급받을
+# 수 있다("최초 배포 시 키가 없어 접속이 안 되는 문제"의 해결책이기도 함).
+#
+# 경로가 최상위 /self-service/가 아니라 /mcp/self-service/ 밑인 이유(실사용 확인,
+# 2026-09-29): 운영 Apache가 /mcp 하위 경로는 이미 게이트웨이로 프록시하지만
+# /self-service/는 몰라서 Apache 자체 404로 막혔다("아파치 환경을 변경하기 어려워" -
+# 기존에 이미 뚫려 있는 /mcp 프록시 규칙에 얹어가는 쪽으로 변경).
+SELF_SERVICE_BASE_URL = "https://pms.utinfo.co.kr"
+
+
+def _generate_client_key() -> str:
+    """URL 쿼리 파라미터(?key=...)에 그대로 써도 안전한 무작위 키. 서버가
+    db_key_exists()로 충돌 여부를 다시 검증하므로 여기서는 무작위성만 확보하면 된다."""
+    import secrets
+    return secrets.token_urlsafe(24)
+
+
+def _self_service_call(action: str, empl_id: str, password: str, timeout: float = 10.0) -> dict:
+    """/mcp/self-service/issue 또는 /mcp/self-service/regenerate(action) 공통 호출부. 키는 매
+    시도마다 새로 생성해서 보내고, 서버가 "key_collision"을 반환하면(무작위 값이라
+    극히 드묾) 최대 3회까지 새 키로 자동 재시도한다 - 사용자에게는 그 과정이 안 보임.
+    :return: 서버 응답 그대로 전달({"ok": bool, "reason": str, "rag_key"?, "user_name"?})
+      - 네트워크 자체가 안 됐으면 {"ok": False, "reason": "network_error", "detail": str}"""
+    last_result = {"ok": False, "reason": "unknown_error"}
+    for _ in range(3):
+        rag_key = _generate_client_key()
+        try:
+            resp = requests.post(
+                f"{SELF_SERVICE_BASE_URL}/mcp/self-service/{action}",
+                json={"empl_id": empl_id, "password": password, "rag_key": rag_key},
+                timeout=timeout,
+            )
+        except Exception as e:
+            return {"ok": False, "reason": "network_error", "detail": str(e)}
+        try:
+            result = resp.json()
+        except Exception:
+            # 응답 본문 일부를 같이 남긴다 - HTML 404/502 페이지인지, 다른 오류 메시지인지
+            # 구분이 안 되면 "서버 오류"라는 것만 알고 원인을 못 좁히는 문제가 실사용
+            # 중 확인됨(2026-09-29). 100자만 남겨 로그가 너무 길어지는 것은 방지.
+            body_preview = (resp.text or "")[:100].replace("\n", " ")
+            return {"ok": False, "reason": "server_error", "detail": f"HTTP {resp.status_code}: {body_preview}"}
+        if result.get("reason") != "key_collision":
+            return result
+        last_result = result
+    return last_result
+
+
+def issue_self_service_key(empl_id: str, password: str) -> dict:
+    """그룹웨어 ID/PW로 개인인증키를 최초 발급받는다."""
+    return _self_service_call("issue", empl_id, password)
+
+
+def regenerate_self_service_key(empl_id: str, password: str) -> dict:
+    """"키 분실 시 재발급" - 그룹웨어 ID/PW로 본인 확인 후 기존 키를 새 값으로 교체한다
+    (예전 키는 그 즉시 무효화됨)."""
+    return _self_service_call("regenerate", empl_id, password)
+
+
 CONFIG = load_config()
 MCP_URL = CONFIG["mcp_url"]
 MCP_URL_SHARED = CONFIG.get("mcp_url_shared", "")

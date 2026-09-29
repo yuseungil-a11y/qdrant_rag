@@ -89,12 +89,13 @@ except Exception:
     pass  # 로그 파일 자체를 못 만들어도 앱 실행을 막을 이유는 아님
 app_logger = _logging.getLogger("gui")
 
-APP_VERSION = "3.2.1"
+APP_VERSION = "3.3.0"
 
 # "도움말 > 프로그램 이력"(사용자 요청)에 보여줄 버전별 한 줄 요약 - 최신 버전이 위로
 # 오도록 계속 맨 위에 추가해나간다. CHANGELOG.md의 상세 기술 설명과는 별개로, 사용자가
 # 보기 편하게 한 줄씩 요약한 것(자세한 원인/수정 내용은 CHANGELOG.md 참고).
 VERSION_HISTORY = [
+    ("3.3.0", "상단에 \"개인인증키 발급/재발급\" 버튼 추가 - 그룹웨어 ID/PW로 직접 키 발급"),
     ("3.2.1", "파일등록 중 한 파일 오류로 전체가 멈추던 버그 수정, 오류 traceback을 app.log에 기록"),
     ("3.2.0", "\"내 개인 저장소 보기\" 추가 - 검색어 없이 내 저장소 파일 전체를 트리로 확인"),
     ("3.1.3", "파일등록 중지 버튼 추가 - 현재 파일 완료 후 안전하게 중단"),
@@ -260,6 +261,13 @@ class App:
         version_bar.pack(side="top", fill="x", padx=10, pady=(4, 0))
         tk.Label(version_bar, text=f"v{APP_VERSION}", fg="#888888", font=(KOREAN_FONT, 8)).pack(side="right")
         tk.Button(version_bar, text="설정...", command=self.open_settings_dialog).pack(side="right", padx=(0, 8))
+        # 명시적 사용자 요청("qdrant 벡터 등록 프로그램에서 개인저장소 인증키를 발급하는
+        # 기능 추가" - 버튼위치는 상단 툴바, 팝업 하나에 발급/재발급 통합) - 그룹웨어
+        # ID/PW로 본인 확인 후 게이트웨이(qdrant_mcp v4.10.0)의 /self-service/issue,
+        # /self-service/regenerate를 호출해 개인 키를 자가발급/재발급 받는다.
+        tk.Button(
+            version_bar, text="개인인증키 발급/재발급...", command=self.open_self_service_key_dialog,
+        ).pack(side="right", padx=(0, 8))
 
         # 명시적 사용자 요청("인증되지 않은 키로 접속할 때 ... 프로그램/GUI 시작 시 한 번",
         # "개인키, 공용키 구분해서 메시지 알려줘") - 개인/공용 저장소 키를 각각 별도로 표시.
@@ -1667,6 +1675,138 @@ class App:
             self.root.after(0, apply)
 
         threading.Thread(target=fetch, daemon=True).start()
+
+    def open_self_service_key_dialog(self):
+        """명시적 사용자 요청("qdrant 벡터 등록 프로그램에서 개인저장소 인증키를 발급하는
+        기능 추가" - 여러 차례 설계 검토 끝에 "버튼위치는 상단 툴바에 배치, 팝업하나에
+        발급/재발급 구현"으로 확정) - 그룹웨어 ID/PW를 입력받아 register.py의
+        issue_self_service_key()/regenerate_self_service_key()를 호출한다. 성공하면
+        받은 키로 개인 저장소 URL을 조립해 화면에 표시(복사 가능)하고 config.json의
+        mcp_url에 자동 저장 - 관리자가 미리 키를 만들어 배포하지 않아도 이 화면 하나로
+        최초 접속까지 끝난다."""
+        win = tk.Toplevel(self.root)
+        win.title("개인인증키 발급/재발급")
+        win.geometry("460x300")
+        win.resizable(False, False)
+
+        tk.Label(
+            win, text="그룹웨어 ID/PW를 입력하세요", font=(KOREAN_FONT, 10, "bold"),
+        ).pack(anchor="w", padx=12, pady=(12, 2))
+        tk.Label(
+            win,
+            text="이미 발급받은 적이 있으면 \"발급\"은 알림만 뜨고 바뀌는 게 없습니다.\n"
+                 "키를 잃어버렸을 때만 \"재발급\"을 누르세요(기존 키는 즉시 무효화됩니다).",
+            fg="#666666", justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        form = tk.Frame(win)
+        form.pack(fill="x", padx=12)
+        tk.Label(form, text="ID:", width=6, anchor="w").grid(row=0, column=0, sticky="w", pady=3)
+        id_entry = tk.Entry(form)
+        id_entry.grid(row=0, column=1, sticky="ew", pady=3)
+        tk.Label(form, text="PW:", width=6, anchor="w").grid(row=1, column=0, sticky="w", pady=3)
+        pw_entry = tk.Entry(form, show="*")
+        pw_entry.grid(row=1, column=1, sticky="ew", pady=3)
+        form.columnconfigure(1, weight=1)
+
+        show_pw_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            win, text="비밀번호 표시", variable=show_pw_var,
+            command=lambda: pw_entry.config(show="" if show_pw_var.get() else "*"),
+        ).pack(anchor="w", padx=12)
+
+        status_var = tk.StringVar(value="")
+        tk.Label(win, textvariable=status_var, fg="#555555", wraplength=430, justify="left").pack(
+            anchor="w", padx=12, pady=(8, 4)
+        )
+
+        result_row = tk.Frame(win)
+        result_row.pack(fill="x", padx=12, pady=(0, 8))
+        result_entry = tk.Entry(result_row, state="readonly")
+        result_entry.pack(side="left", fill="x", expand=True)
+
+        def copy_result():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(result_entry.get())
+            status_var.set(status_var.get() + " (복사됨)")
+
+        copy_button = tk.Button(result_row, text="복사", command=copy_result, state="disabled")
+        copy_button.pack(side="left", padx=(6, 0))
+
+        _REASON_MESSAGES = {
+            "invalid_credentials": "ID 또는 비밀번호가 올바르지 않습니다(퇴사자는 발급 대상이 아닙니다).",
+            "already_registered": "이미 발급된 사용자입니다. 키를 잃어버리셨다면 \"재발급\"을 눌러주세요.",
+            "not_registered": "아직 발급받은 적이 없습니다. 먼저 \"발급\"을 눌러주세요.",
+            "key_collision": "일시적인 오류입니다. 다시 시도해주세요.",
+            "invalid_request": "입력값을 확인해주세요.",
+            "rate_limited": "시도 횟수가 많아 잠시 제한되었습니다. 5분 뒤 다시 시도해주세요.",
+            "db_error": "서버 DB 연결에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            "network_error": "서버에 연결할 수 없습니다.",
+            "server_error": "서버 오류가 발생했습니다.",
+        }
+
+        def run_action(action_fn, label: str):
+            empl_id = id_entry.get().strip()
+            password = pw_entry.get()
+            if not empl_id or not password:
+                status_var.set("ID와 비밀번호를 모두 입력하세요.")
+                return
+            issue_button.config(state="disabled")
+            regen_button.config(state="disabled")
+            copy_button.config(state="disabled")
+            status_var.set(f"{label} 처리 중...")
+
+            def worker():
+                try:
+                    result = action_fn(empl_id, password)
+                except Exception as e:
+                    result = {"ok": False, "reason": "network_error", "detail": register.describe_exception(e)}
+
+                def apply():
+                    issue_button.config(state="normal")
+                    regen_button.config(state="normal")
+                    if result.get("ok"):
+                        rag_key = result["rag_key"]
+                        url = f"{register.SELF_SERVICE_BASE_URL}/mcp?key={rag_key}"
+                        result_entry.config(state="normal")
+                        result_entry.delete(0, "end")
+                        result_entry.insert(0, url)
+                        result_entry.config(state="readonly")
+                        copy_button.config(state="normal")
+                        register.save_mcp_urls(url, register.MCP_URL_SHARED, register.MCP_URL_PROPOSAL)
+                        status_var.set(f"{result.get('user_name', '')}님, {label} 완료 - 개인 저장소 URL이 저장되었습니다.")
+                        self.log(f"[개인인증키] {label} 완료 - {result.get('user_name', '')}")
+                    else:
+                        # 버그 수정 - 실패 시 status_var만 바뀌고 app.log/운영로그 어디에도
+                        # 안 남아서, 실사용 중 "서버 오류" 원인(HTTP 상태코드 등 detail)을
+                        # 재현 없이는 알아낼 방법이 없었다(2026-09-29 실사용 보고로 발견).
+                        reason = result.get("reason", "unknown_error")
+                        detail = result.get("detail")
+                        message = _REASON_MESSAGES.get(reason, f"실패: {reason}")
+                        if detail:
+                            message += f" ({detail})"
+                        status_var.set(message)
+                        app_logger.warning(
+                            "개인인증키 %s 실패 - empl_id=%s reason=%s detail=%s",
+                            label, empl_id, reason, detail,
+                        )
+                        self.log(f"[개인인증키] {label} 실패 - {reason}" + (f" ({detail})" if detail else ""))
+
+                self.root.after(0, apply)
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        btn_row = tk.Frame(win)
+        btn_row.pack(fill="x", padx=12, pady=(4, 12))
+        issue_button = tk.Button(
+            btn_row, text="발급", command=lambda: run_action(register.issue_self_service_key, "발급"),
+        )
+        issue_button.pack(side="left")
+        regen_button = tk.Button(
+            btn_row, text="재발급(키 분실 시)", fg="#a33",
+            command=lambda: run_action(register.regenerate_self_service_key, "재발급"),
+        )
+        regen_button.pack(side="left", padx=(8, 0))
 
     # --- 위키 문서 등록 ---
 
